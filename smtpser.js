@@ -141,7 +141,7 @@ export class SMTPServer extends Set{
 					}
 					let err = ''
 					try{
-						err = (type ? this.onOutgoing : this.onIncoming)?.(from, tos, Mail.fromBuffer(Buffer.concat(body), true), auth) ?? ''
+						err = (type ? this.onOutgoing : this.onIncoming)?.(from, tos, Mail.fromBuffer(Buffer.concat(body), false), auth) ?? ''
 					}catch(e){ Promise.reject(e); err = 1 }
 					stage = 0
 					sock.write(err ? '550 '+(typeof err == 'string' ? err.replace(/[\r\n]/g, ' ') : 'Internal server error')+'\r\n' : '250 Message queued\r\n')
@@ -215,7 +215,7 @@ export class SMTPServer extends Set{
 						hostname = data
 					}else if(verb == 'EHLO'){
 						sock.write(`250-${this.hostWatermark} at your service\
-\r\n250-${sock instanceof TLSSocket ? 'AUTH PLAIN LOGIN' : 'STARTTLS'}\r\n250-PIPELINING\r\n250-8BITMIME\r\n250-SMTPUTF8\r\n250-CHUNKING\r\n250 SIZE ${this.maxMessageBody>>>0}\r\n`)
+\r\n250-${sock instanceof TLSSocket ? 'AUTH PLAIN LOGIN' : 'STARTTLS'}\r\n250-PIPELINING\r\n250-BINARYMIME\r\n250-8BITMIME\r\n250-SMTPUTF8\r\n250-CHUNKING\r\n250 SIZE ${this.maxMessageBody>>>0}\r\n`)
 						hostname = data
 					}else if(verb == 'QUIT'){
 						sock.write('221 Bye\r\n')

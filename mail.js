@@ -26,21 +26,19 @@ export class Mail extends Map{
 		const h = norm && !this.#bh ? crypto.createHash('sha256') : null
 		if(!chunking){
 			// dot stuffing
-			let i = 0, last = 0
+			let i = 0
 			const body = this.#body
+			if(body[0] == 46) arr.push(_internedBuffers.dot)
 			while(true){
-				const j = body.indexOf(46, i)
+				const j = body.indexOf('\n.', i)
 				if(j < 0) break
-				if(!j || (body[j-1]==10 && body[j-2]==10)){
-					const a = body.subarray(last, j)
-					arr.push(a, _internedBuffers.dot)
-					if(h) h.update(a), h.update(_internedBuffers.dot)
-					last = j
-				}
-				i = j+1
+				const a = body.subarray(i, j+2)
+				arr.push(a, _internedBuffers.dot)
+				if(h) h.update(a), h.update(_internedBuffers.dot)
+				i = j+2
 			}
-			if(last < body.length){
-				const a = body.subarray(last)
+			if(i < body.length){
+				const a = body.subarray(i)
 				arr.push(a)
 				if(h) h.update(a)
 			}
@@ -119,10 +117,24 @@ export class Mail extends Map{
 		return email.trimEnd()
 	}
 	static fromBuffer(buf, chunking = false){
+		console.log(buf)
 		const m = new Mail()
-		if(!chunking && buf.toString('ascii', -5) == '\r\n.\r\n') buf = buf.subarray(0, -5)
 		const sep = buf.indexOf('\n\r\n')
-		m.#body = sep >= 0 ? buf.slice(sep+3) : Buffer.alloc(0)
+		let body = sep >= 0 ? buf.slice(sep+3) : Buffer.alloc(0)
+		if(!chunking){
+			if(body.toString('ascii', -5) == '\r\n.\r\n') body = body.subarray(0, -5)
+			// dot unstuff
+			let i = 0
+			const arr = []
+			while(true){
+				const j = body.indexOf('\n.', i)
+				if(j < 0) break
+				arr.push(body.subarray(i, j+1))
+				i = j+2
+			}
+			if(i < body.length) arr.push(body.subarray(i))
+			if(arr.length > 1) body = Buffer.concat(arr)
+		}
 		let last = null, lastv = ''
 		for(const h of (sep >= 0 ? buf.toString('utf8', 0, sep) : buf.toString('utf8')).split('\n')){
 			if((h[0] == ' ' || h[0] == '\t') && typeof last == 'string'){

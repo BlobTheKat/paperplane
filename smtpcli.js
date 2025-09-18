@@ -5,7 +5,7 @@ import { Mail } from './mail.js'
 import crypto from 'crypto'
 import fs from 'fs'
 
-export const PIPELINING = 1, MIMEUTF8 = 2, SMTPUTF8 = 4, CHUNKING = 8
+export const PIPELINING = 1, MIMEUTF8 = 2, SMTPUTF8 = 4, CHUNKING = 8, BINARYMIME = 16
 
 export class SMTPClient extends Map{
 	debug = null
@@ -126,6 +126,7 @@ export class SMTPClient extends Map{
 							else if(extStr == 'PIPELINING') ext |= PIPELINING
 							else if(extStr == '8BITMIME') ext |= MIMEUTF8
 							else if(extStr == 'SMTPUTF8') ext |= SMTPUTF8
+							else if(extStr == 'BINARYMIME') ext |= BINARYMIME
 							else if(extStr == 'CHUNKING') ext |= CHUNKING
 							else if(extStr.startsWith('SIZE ')) maxSize = +extStr.slice(5)
 						}else stage = 1
@@ -252,7 +253,7 @@ export class SMTPClient extends Map{
 	}) }
 	async #send(sock, from, to, body, failed){
 		if(!sock) throw null
-		const wait = !(sock.extensions & PIPELINING), suffix = (sock.extensions & SMTPUTF8 ? ' SMTPUTF8' : '') + (sock.extensions & MIMEUTF8 ? ' BODY=8BITMIME' : '')
+		const wait = !(sock.extensions & PIPELINING), suffix = (sock.extensions & SMTPUTF8 ? ' SMTPUTF8' : '') + (!(~sock.extensions & (BINARYMIME | CHUNKING)) ? ' BODY=BINARYMIME'  : sock.extensions & MIMEUTF8 ? ' BODY=8BITMIME' : '')
 		if(from[0] != '<') from = `<${from}>`
 		sock.write(`MAIL FROM:${from}\r\n`)
 		if(wait && !(await sock.line()).startsWith('250')) throw null
