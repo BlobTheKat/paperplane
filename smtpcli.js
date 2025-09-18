@@ -9,7 +9,7 @@ export const PIPELINING = 1, MIMEUTF8 = 2, SMTPUTF8 = 4, CHUNKING = 8
 
 export class SMTPClient extends Map{
 	debug = null
-	sessions = new Map()
+	#sessions = new Map()
 	constructor(host, key, selector = 'mail'){
 		super()
 		this.host = host
@@ -35,7 +35,7 @@ export class SMTPClient extends Map{
 	removePrivateKey(host){ super.delete(host) }
 	getSession(hostname, cb){
 		if(!hostname) return void cb(null)
-		let sock = this.sessions.get(hostname)
+		let sock = this.#sessions.get(hostname)
 		if(typeof sock == 'number'){
 			// Dont-try-again guard
 			if(Date.now() < sock) return void cb(null)
@@ -44,7 +44,7 @@ export class SMTPClient extends Map{
 			const pr = cb(sock)
 			if(typeof pr?.then == 'function'){
 				const arr = []; let i = 0
-				this.sessions.set(hostname, arr)
+				this.#sessions.set(hostname, arr)
 				sock.ref()
 				const done = () => {
 					while(i < arr.length){
@@ -55,14 +55,14 @@ export class SMTPClient extends Map{
 						}
 					}
 					sock.unref()
-					this.sessions.set(hostname, sock)
+					this.#sessions.set(hostname, sock)
 				}
 				pr.then(done, err => { done(); throw err })
 			}
 			return
 		}
 		const cbs = [cb]
-		this.sessions.set(hostname, cbs)
+		this.#sessions.set(hostname, cbs)
 		this.debug?.('Resolving %s...', hostname)
 		resolveMx(hostname, (_, recs) => {
 			const targets = recs?.length ?
@@ -75,7 +75,7 @@ export class SMTPClient extends Map{
 	#connect(hostname, targets, retry, cbs){
 		if(!targets.length){
 			this.debug?.('No available server found for @%s', hostname)
-			this.sessions.set(hostname, Date.now() + 3600e3)
+			this.#sessions.set(hostname, Date.now() + 3600e3)
 			for(const c of cbs) c(null)
 			return
 		}
@@ -139,7 +139,7 @@ export class SMTPClient extends Map{
 								// TLS not supported :(
 								sock.removeAllListeners('error')
 								sock.removeAllListeners('close')
-								sock.destroy()
+								sock.end()
 								return err(null)
 							}
 						}else{
@@ -156,7 +156,7 @@ export class SMTPClient extends Map{
 										return
 									}
 								}
-								if(this.sessions.has(hostname)) this.sessions.set(hostname, sock)
+								if(this.#sessions.has(hostname)) this.#sessions.set(hostname, sock)
 								sock.unref()
 								return false
 							}
@@ -204,15 +204,19 @@ export class SMTPClient extends Map{
 			sock.removeAllListeners('error')
 			sock.removeAllListeners('close')
 			sock.end()
-			this.sessions.delete(hostname)
+			this.#sessions.delete(hostname)
 		})
 		sock.once('error', err)
 		sock.once('close', err)
 	}
 
 	flushCaches(){
-		for(const {0: key, 1: v} of this.sessions){
-			if(typeof v == 'number' || v instanceof TLSSocket) this.sessions.delete(key)
+		for(const {0: key, 1: v} of this.#sessions){
+			if(typeof v == 'number') this.#sessions.delete(key)
+			else if(v instanceof TLSSocket){
+				v.end()
+				this.#sessions.delete(key)
+			}
 		}
 	}
 
@@ -228,7 +232,7 @@ export class SMTPClient extends Map{
 			if(!to.length) return
 			const toHere = [to[0].trim()], toElsewhere = new Map()
 			const server = Mail.getServer(toHere[0])
-			for(let i = to.length; i > 0; i--){
+			for(let i = to.length-1; i >= 0; i--){
 				const email = to[i].trim(), ser = Mail.getServer(email)
 				if(ser == server){
 					toHere.push(email)
@@ -248,13 +252,13 @@ export class SMTPClient extends Map{
 	}) }
 	async #send(sock, from, to, body, failed){
 		if(!sock) throw null
-		const wait = !(sock.extensions & PIPELINING), utf8suffix = sock.extensions & SMTPUTF8 ? ' SMTPUTF8' : ''
+		const wait = !(sock.extensions & PIPELINING), suffix = (sock.extensions & SMTPUTF8 ? ' SMTPUTF8' : '') + (sock.extensions & MIMEUTF8 ? ' BODY=8BITMIME' : '')
 		if(from[0] != '<') from = `<${from}>`
 		sock.write(`MAIL FROM:${from}\r\n`)
 		if(wait && !(await sock.line()).startsWith('250')) throw null
 		const f = []
 		for(const rcpt of to){
-			sock.write(rcpt[0] != '<' ? `RCPT TO:<${rcpt}>${utf8suffix}\r\n` : `RCPT TO:${rcpt+utf8suffix}\r\n`)
+			sock.write(rcpt[0] != '<' ? `RCPT TO:<${rcpt}>${suffix}\r\n` : `RCPT TO:${rcpt+suffix}\r\n`)
 			if(wait && !(await sock.line()).startsWith('250')) f.push(rcpt)
 		}
 		if(!wait){

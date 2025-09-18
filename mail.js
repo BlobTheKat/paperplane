@@ -1,7 +1,7 @@
 import crypto from 'crypto'
 
 export class Mail extends Map{
-	#body
+	#body; #bh = ''
 	constructor(a, b){
 		super()
 		if(typeof a == 'object' && !(a instanceof Uint8Array) && !(a instanceof ArrayBuffer)){
@@ -10,21 +10,20 @@ export class Mail extends Map{
 			a = b
 		}
 		this.#body = Buffer.from(a || '')
-		this.bh = ''
 	}
 	setHeader(k, v){ super.set(k.toLowerCase(), (''+v).trim()) }
 	getHeader(k){ return super.get(k.toLowerCase()) }
 	hasHeader(k){ return super.has(k) }
 	set body(a){
 		this.#body = Buffer.from(a || '')
-		this.bh = ''
+		this.#bh = ''
 	}
 	get body(){ return this.#body }
 	toBuffer(norm = null, from, chunking = false){
 		// Assume utf-8 support
 		let headers = ''
 		const arr = [null]
-		const h = norm && !this.bh ? crypto.createHash('sha256') : null
+		const h = norm && !this.#bh ? crypto.createHash('sha256') : null
 		if(!chunking){
 			// dot stuffing
 			let i = 0, last = 0
@@ -51,13 +50,13 @@ export class Mail extends Map{
 			arr.push(this.#body)
 			if(h) h.update(this.#body)
 		}
-		if(h) this.bh = h.digest('base64')
+		if(h) this.#bh = h.digest('base64')
 		if(norm){
 			const host = Mail.getServer(from)
 			if(!host) throw "Invalid 'From:' email address"
 			const key = norm.get(host) ?? norm.privKey
 			const now = Math.floor(Date.now()*.001)+''
-			headers = `From: ${super.get('from') ?? from}\r\nDate: ${super.get('date') ?? new Date().toUTCString().replace('GMT', '+0000')}\r\nSubject: ${super.get('subject') ?? ''}\r\nContent-Type: ${super.get('content-type') ?? 'text/plain;charset=utf-8'}\r\nMIME-Version: 1.0\r\nMessage-ID: <pplane-${now}-${this.bh.slice(0,-1)}@${host}>\r\nDKIM-Signature: v=1;a=rsa-sha256;d=${host};s=${key.selector};h=from:date:subject:content-type:mime-version:message-id;t=${now};bh=${this.bh};b=`
+			headers = `From: ${super.get('from') ?? from}\r\nDate: ${super.get('date') ?? new Date().toUTCString().replace('GMT', '+0000')}\r\nSubject: ${super.get('subject') ?? ''}\r\nContent-Type: ${super.get('content-type') ?? 'text/plain;charset=utf-8'}\r\nMIME-Version: 1.0\r\nMessage-ID: ${super.get('message-id') ?? `<pplane-${now}-${this.#bh.slice(0,-1)}@${host}>`}\r\nDKIM-Signature: v=1;a=rsa-sha256;d=${host};s=${key.selector};h=from:date:subject:content-type:mime-version:message-id;t=${now};bh=${this.#bh};b=`
 			headers += crypto.sign(null, headers, key).toString('base64') + '\n'
 		}
 		for(const {0: k, 1: v} of this){
@@ -122,13 +121,17 @@ export class Mail extends Map{
 	static fromBuffer(buf, chunking = false){
 		const m = new Mail()
 		if(!chunking && buf.toString('ascii', -5) == '\r\n.\r\n') buf = buf.subarray(0, -5)
-		const sep = buf.indexOf('\r\n\r\n')
-		m.#body = sep >= 0 ? buf.slice(sep+4) : Buffer.alloc(0)
-		for(const h of (sep >= 0 ? buf.toString('utf8', 0, sep) : buf.toString('utf8')).split('\r\n')){
+		const sep = buf.indexOf('\n\r\n')
+		m.#body = sep >= 0 ? buf.slice(sep+3) : Buffer.alloc(0)
+		let last = null, lastv = ''
+		for(const h of (sep >= 0 ? buf.toString('utf8', 0, sep) : buf.toString('utf8')).split('\n')){
+			if((h[0] == ' ' || h[0] == '\t') && typeof last == 'string'){
+				m.setHeader(last, lastv += h.trimStart())
+				continue
+			}
 			const colon = h.indexOf(':')
 			if(colon < 0) continue
-			const name = h.slice(0, colon).toLowerCase(), val = h.slice(colon).trim()
-			super.set(name, val)
+			m.setHeader(last = h.slice(0, colon), lastv = h.slice(colon+1).trimEnd())
 		}
 		return m
 	}

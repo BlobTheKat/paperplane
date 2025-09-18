@@ -4,7 +4,10 @@ import { Mail } from './mail.js'
 
 export class SMTPServer extends Set{
 	debug = null
-	maxMessageBody = 25 * 1048576 // 25MB
+	/**
+	 * Maximum message body in bytes. Default: 25MB
+	 */
+	maxMessageBody = 25 * 1048576
 	/**
 	 * Called when a server sends us incoming mail.
 	 * @type (from: string, tos: string[], mail: Mail, auth: any?) => string?
@@ -27,20 +30,54 @@ export class SMTPServer extends Set{
 	 * Note that onIncoming/onOutgoing may still be fired at any time irrespective of onAuthenticate, it is up to you to verify within those handlers that the client has permission to send based on the auth parameter. By default, if no authentication occured, the auth parameter will be null
 	 */
 	onAuthenticate = (user, pass, isServer) => {
-		return { user, pass, isServer }
+		return { user: Mail.getLocal(user) || user, pass, isServer }
 	}
-	#tlsOptions = null
+	/**
+	 * Check that a session is authenticated before allowing MAIL FROM: commands or invoking callbacks
+	 * false: Don't check
+	 * true: Check for outgoing (isServer=false)
+	 * function: custom logic that returns true to allow or false to reject
+	 * @type boolean | (auth: any, isServer: boolean) => boolean
+	 */
+	checkAuth = false
+	/**
+	 * Watermark used within the SMTP protocol
+	 */
 	hostWatermark = 'Mail server'
+	/**
+	 * Maximum number of target recipients per email that this server can receive or forward
+	 */
 	maxRecipients = 50
+	/**
+	 * Whether to reject all emails by default
+	 */
+	reject = false
+	/**
+	 * Add an exception to the allowlist/blocklist defined by `reject`
+	 * @param {string} server The domain to add as an exception
+	 * For forwarded emails, this acts as an exception to email senders ("we will forward anything that is from us")
+	 * For incoming emails, this acts as an exception to email recipients ("we will accept anything that is meant for us")
+	 */
 	addException(server){ super.add(server.toLowerCase()) }
+	/**
+	 * Remove an exception to the allowlist/blocklist defined by `reject`
+	 * @param {string} server The domain to remove
+	 * See addException()
+	 */
 	removeException(server){ return super.delete(server.toLowerCase()) }
+	/**
+	 * Check if an exception exists to the allowlist/blocklist defined by `reject`
+	 * @param {string} server The domain to check
+	 * See addException()
+	 */
 	hasException(server){ return super.has(server.toLowerCase()) }
+	#tlsOptions = null
 	#handler(type, sock){
 		this.debug?.('New client on ' + ['SMTP', 'SMTPS', 'STLS'][type] + ' port')
 		if(this.debug){
 			const w = sock.write
 			sock.write = (buf) => {
-				this.debug?.('\x1b[33m%s\x1b[m', buf.toString().trimEnd())
+				this.debug?.('\x1b[33mS: %s\x1b[m', buf.toString().trimEnd())
 				w.call(sock, buf)
 			}
 		}
@@ -58,11 +95,17 @@ export class SMTPServer extends Set{
 					if(bodyToRead > buf.length-i){
 						bodyToRead -= buf.length-i
 						body.push(i ? buf.subarray(i) : buf)
+						this.debug?.('\x1b[32mC:(%d bytes)\x1b[m', buf.length-i)
 						return
 					}
 					body.push(bodyToRead == buf.length ? buf : buf.subarray(i, i+bodyToRead))
+					this.debug?.('\x1b[32mC:(%d bytes) LAST\x1b[m', bodyToRead)
 					bodyToRead = 0
 					if(stage == 5){
+						if(typeof this.checkAuth == 'function' ? !this.checkAuth(auth, !type) : type && this.checkAuth && !auth){
+							sock.write('530 Unauthenticated\r\n')
+							break
+						}
 						let err = ''
 						try{
 							err = (type ? this.onOutgoing : this.onIncoming)?.(from, tos, Mail.fromBuffer(Buffer.concat(body), true), auth) ?? ''
@@ -72,23 +115,30 @@ export class SMTPServer extends Set{
 						body.length = 0
 						bodyLen = 0
 						from = ''; tos.length = 0
-					}
+					}else sock.write('250 Received\r\n')
 				}
 				if(i >= buf.length) return
-				if(stage == 3) while(true){
-					let i1 = i
+				if(stage == 3){ let i1 = i; while(true){
 					const j = buf.indexOf(10, i1)
 					if(j < 0){
 						body.push(i ? buf.subarray(i) : buf)
+						this.debug?.('\x1b[32mC:(%d bytes)\x1b[m', buf.length-i)
 						return
 					}
 					let k = j, b = buf, bi = body.length
 					for(let i = 3; i >= 0; i--){
 						if(!k) k = (b = body[--bi]) ? b.length : 0
-						if(!k || b[--k] != '\r\n.\r'[i]){ k = -1; break }
+						if(!k || b[--k] != ((0x0D2E0A0D>>i*8)&255)){ k = -1; break }
 					}
 					if(k < 0){ i1 = j+1; continue }
-					if(j+1 > i) body.push(buf.subarray(i, j+1))
+					if(j+1 > i){
+						body.push(buf.subarray(i, j+1))
+						this.debug?.('\x1b[32mC:(%d bytes) LAST\x1b[m', j+1-i)
+					}
+					if(typeof this.checkAuth == 'function' ? !this.checkAuth(auth, !type) : type && this.checkAuth && !auth){
+						sock.write('530 Unauthenticated\r\n')
+						break
+					}
 					let err = ''
 					try{
 						err = (type ? this.onOutgoing : this.onIncoming)?.(from, tos, Mail.fromBuffer(Buffer.concat(body), true), auth) ?? ''
@@ -98,7 +148,9 @@ export class SMTPServer extends Set{
 					body.length = 0
 					bodyLen = 0
 					from = ''; tos.length = 0
-				}
+					i = j+1
+					break
+				} }
 				const j = buf.indexOf(10, i)
 				if(j < 0){
 					buffered.push(new Uint8Array(buf.buffer, buf.byteOffset + i, buf.length - i))
@@ -108,6 +160,7 @@ export class SMTPServer extends Set{
 				i = j+1
 				const line = Buffer.concat(buffered).toString().trim()
 				buffered.length = 0
+				this.debug?.('\x1b[32mC: %s\x1b[m', line)
 
 				switch(stage){
 					// AUTH LOGIN
@@ -164,6 +217,10 @@ export class SMTPServer extends Set{
 						sock.write(`250-${this.hostWatermark} at your service\
 \r\n250-${sock instanceof TLSSocket ? 'AUTH PLAIN LOGIN' : 'STARTTLS'}\r\n250-PIPELINING\r\n250-8BITMIME\r\n250-SMTPUTF8\r\n250-CHUNKING\r\n250 SIZE ${this.maxMessageBody>>>0}\r\n`)
 						hostname = data
+					}else if(verb == 'QUIT'){
+						sock.write('221 Bye\r\n')
+						sock.end()
+						return
 					}else sock.write('503 Impolite\r\n')
 					continue
 				}
@@ -177,18 +234,19 @@ export class SMTPServer extends Set{
 					if(this.debug){
 						const w = sock.write
 						sock.write = (buf) => {
-							this.debug?.('\x1b[33m%s\x1b[m', buf.toString().trimEnd())
+							this.debug?.('\x1b[33mS: %s\x1b[m', buf.toString().trimEnd())
 							w.call(sock, buf)
 						}
 					}
 					sock.once('secureConnect', () => sock.write('220 '+this.hostWatermark+' ESMTP Paperplane\r\n'))
 					sock.on('data', ondata)
 					sock.once('error', () => sock.destroy())
+					hostname = ''
 					break
 				}
 				case 'AUTH': {
 					const method = data.slice(0, 6).toUpperCase()
-					if(method == 'PLAIN'){
+					if(method == 'PLAIN '){
 						let str = ''
 						try{
 							// Don't allow (user+pass).length > 65536
@@ -197,7 +255,7 @@ export class SMTPServer extends Set{
 							if(!str || str.charCodeAt()) throw null
 							const j = str.indexOf('\0', 1)
 							if(j < 0) throw null
-							const r = this.onAuthenticate?.(str.slice(1, j), str.slice(j), !type) ?? null
+							const r = this.onAuthenticate?.(str.slice(1, j), str.slice(j+1), !type) ?? null
 							if(typeof r?.then == 'function') r.then(v => {
 								sock.write('235 Authentication successful\r\n')
 								auth = v
@@ -211,15 +269,29 @@ export class SMTPServer extends Set{
 						}catch{
 							sock.write('535 Invalid credentials\r\n')
 						}
-					}else if(method == 'LOGIN'){
+					}else if(method == 'LOGIN '){
 						sock.write('334 VXNlcm5hbWU6\r\n')
 						stage = 1
+					}else{
+						sock.write('500 Method not supported\r\n')
 					}
 				} break
 				case 'MAIL': {
+					if(typeof this.checkAuth == 'function' ? !this.checkAuth(auth, !type) : type && this.checkAuth && !auth){
+						sock.write('530 Unauthenticated\r\n')
+						break
+					}
 					let p = data.slice(5).trimStart()
-					if(p.slice(-9).toUpperCase() == ' SMTPUTF8') p = p.slice(0, -9).trimEnd()
-					if(data.slice(0, 5).toUpperCase() != 'FROM:' || p[0] != '<' || p[p.length-1] != '>'){
+					let i = 1
+					if(p[1] == '"') while(true){
+						i = p.indexOf('"', i+1)
+						if(i < 0) break
+						let j = i
+						while(p[--j] == '\\');
+						if((j-i)&1) break
+					}
+					if(i >= 0) i = p.indexOf('>', i)
+					if(data.slice(0, 5).toUpperCase() != 'FROM:' || p[0] != '<' || i < 0){
 						sock.write('500 Malformed command\r\n')
 						break
 					}
@@ -227,8 +299,8 @@ export class SMTPServer extends Set{
 						sock.write('503 Wrong order\r\n')
 						break
 					}
-					const ser = Mail.getServer(p = p.slice(1, -1))
-					if(type && (!ser || (super.has(ser) ^ this.#reject))){
+					const ser = Mail.getServer(p = p.slice(1, i))
+					if(type && (!ser || (super.has(ser) ^ this.reject))){
 						sock.write('550 Server does not handle that email domain\r\n')
 						break
 					}
@@ -236,9 +308,17 @@ export class SMTPServer extends Set{
 					sock.write('250 Ok\r\n')
 				} break
 				case 'RCPT': {
-					let p = data.slice(5).trimStart()
-					if(p.slice(-9).toUpperCase() == ' SMTPUTF8') p = p.slice(0, -9).trimEnd()
-					if(data.slice(0, 3).toUpperCase() != 'TO:' || p[0] != '<' || p[p.length-1] != '>'){
+					let p = data.slice(3).trimStart()
+					let i = 1
+					if(p[1] == '"') while(true){
+						i = p.indexOf('"', i+1)
+						if(i < 0) break
+						let j = i
+						while(p[--j] == '\\');
+						if((j-i)&1) break
+					}
+					if(i >= 0) i = p.indexOf('>', i)
+					if(data.slice(0, 3).toUpperCase() != 'TO:' || p[0] != '<' || i < 0){
 						sock.write('500 Malformed command\r\n')
 						break
 					}
@@ -250,8 +330,8 @@ export class SMTPServer extends Set{
 						sock.write('550 Maximum number of recipients reached\r\n')
 						break
 					}
-					const ser = Mail.getServer(p = p.slice(1, -1))
-					if(!type && (!ser || (super.has(ser) ^ this.#reject))){
+					const ser = Mail.getServer(p = p.slice(1, i))
+					if(!type && (!ser || (super.has(ser) ^ this.reject))){
 						sock.write('550 Server does not handle that email domain\r\n')
 						break
 					}
@@ -264,6 +344,7 @@ export class SMTPServer extends Set{
 						break
 					}
 					stage = 3
+					sock.write('354 End data with <CR><LF>.<CR><LF>\r\n')
 				} break
 				case 'BDAT': {
 					if(!from || !tos.length){
@@ -280,16 +361,20 @@ export class SMTPServer extends Set{
 					}
 					bodyToRead = len
 					stage = 4 + data.slice(-5).toUpperCase() == ' LAST'
+					sock.write('250 Received\r\n')
 				} break
 				case 'QUIT':
 					sock.write('221 Bye\r\n')
 					sock.end()
-					break
+					return
 				case 'RSET':
 					from = ''
 					tos.length = 0
 					body.length = 0; bodyLen = 0
 					sock.write('250 Ok\r\n')
+					break
+				default:
+					sock.write('500 Unknown command\r\n')
 					break
 				} //switch
 			}
@@ -297,23 +382,30 @@ export class SMTPServer extends Set{
 		sock.on('data', ondata)
 		sock.once('error', () => sock.destroy())
 	}
+	/**
+	 * Create an SMTP server
+	 * @param  {...string} hosts Empty = allow-all server. Otherwise, this represents a list of email domains to allowlist for incoming/outgoing, see addException()
+	 */
 	constructor(...hosts){
 		if(hosts.length == 1 && Array.isArray(hosts[0])) hosts = hosts[0]
 		if(hosts.length){
 			super(hosts)
-			this.#reject = true
+			this.reject = true
 		}else super()
 	}
-	get reject(){ return this.#reject }
-	set reject(a){ this.#reject = !!a }
-	#reject = false
 	#smtpServer = null
 	#smtpsServer = null
 	#stlsServer = null
+	/**
+	 * @param {import('tls').SecureContextOptions} opts Set TLS options (certificate, ...)
+	 */
 	setTLS(opts){
 		this.#tlsOptions = opts
 		this.#smtpServer?.setSecureContext(opts)
 	}
+	/**
+	 * @param {import('tls').SecureContextOptions} opts TLS options (certificate, ...)
+	 */
 	async listen(tlsOpts, host, smtpPort = 25, smtpsPort = 465, stlsPort = 587){
 		if(tlsOpts) this.#tlsOptions = tlsOpts
 		if(typeof host == 'function') cb = host, host = ''
