@@ -13,20 +13,29 @@ export class Mail extends Map{
 	}
 	setHeader(k, v){ super.set(k.toLowerCase(), (''+v).trim()) }
 	getHeader(k){ return super.get(k.toLowerCase()) }
-	hasHeader(k){ return super.has(k) }
+	hasHeader(k){ return super.has(k.toLowerCase()) }
+	removeHeader(k){ return super.delete(k.toLowerCase()) }
 	set body(a){
 		this.#body = Buffer.from(a || '')
 	}
 	get body(){ return this.#body }
-	toBuffer(norm = null, from = '', chunking = false){
+	toBuffer(norm = null, from = '', chunking = true){
+		from = super.get('from') ?? from
 		// Assume utf-8 support
-		let headers = ''
+		let headers = '', h = null, key = null, host = ''
 		const arr = [null]
-		const h = norm ? crypto.createHash('sha256') : null
+		if(norm){
+			h = crypto.createHash('sha256')
+			host = from ? Mail.getServer(from) : ''
+			key = host ? norm.get(host) || norm.privKey : norm.privKey
+		}
+		const body = this.#body
+		let end = body.length
+		while(end >= 2 && body[end-1] == 10 && body[end-2] == 13) end -= 2
+		end += 2
 		if(!chunking){
 			// dot stuffing
 			let i = 0
-			const body = this.#body
 			if(body[0] == 46) arr.push(_internedBuffers.dot)
 			while(true){
 				const j = body.indexOf('\n.', i)
@@ -36,36 +45,35 @@ export class Mail extends Map{
 				if(h) h.update(a), h.update(_internedBuffers.dot)
 				i = j+2
 			}
-			if(i < body.length){
-				const a = body.subarray(i)
-				arr.push(a)
-				if(h) h.update(a)
-			}
+			const a = body.subarray(i)
+			arr.push(a)
+			if(h) h.update(end >= body.length ? a : body.subarray(i, end))
 			arr.push(_internedBuffers.end)
-			if(h) h.update('\r\n')
 		}else{
-			arr.push(this.#body)
-			if(h) h.update(this.#body)
+			arr.push(body)
+			if(h) h.update(end < body.length ? body.subarray(0, end) : body)
 		}
+		if(h && end > body.length) h.update('\r\n')
 		if(norm){
-			const host = Mail.getServer(from)
-			if(!host) throw "Invalid 'From:' email address"
-			const key = norm.get(host) ?? norm.privKey
 			const now = Math.floor(Date.now()*.001)+''
-			headers = `From: ${super.get('from') ?? from}\r\nDate: ${super.get('date') ?? new Date().toUTCString().replace('GMT', '+0000')}\r\nSubject: ${super.get('subject') ?? ''}\r\nContent-Type: ${super.get('content-type') ?? 'text/plain;charset=utf-8'}\r\nMIME-Version: ${super.get('mime-version') ?? '1.0'}\r\nMessage-ID: ${super.get('message-id') ?? this.#genId(now, from)}\r\nDKIM-Signature: v=1;a=rsa-sha256;d=${host};s=${key.selector};h=from:date:subject:content-type:mime-version:message-id;t=${now};bh=${h.digest('base64')};b=`
-			headers += crypto.sign(null, headers, key).toString('base64') + '\n'
+			headers = `From: ${from}\r\nDate: ${super.get('date') ?? new Date().toUTCString().replace('GMT', '+0000')}\r\nSubject: ${super.get('subject') ?? ''}\r\nContent-Type: ${super.get('content-type') ?? 'text/plain;charset=utf-8'}\r\nMIME-Version: ${super.get('mime-version') ?? '1.0'}\r\nMessage-ID: ${super.get('message-id') ?? this.#genId(now, from)}\r\n`
+			if(key){
+				headers += `DKIM-Signature: v=1;a=rsa-sha256;d=${host};s=${key.selector};h=from:date:subject:content-type:mime-version:message-id;t=${now};bh=${h.digest('base64')};b=`
+				headers += crypto.sign(null, headers, key).toString('base64') + '\r\n'
+			}
 		}
 		for(const {0: k, 1: v} of this){
-			if(norm && prewritten.includes(k)) continue
-			headers += k + ': ' + v + '\r\n'
+			const cased = knownHeaders.get(k) ?? ''
+			if(norm && cased && (key || k !== 'dkim-signature')) continue
+			headers += (cased || k) + ': ' + v + '\r\n'
 		}
 		headers += '\r\n'
 		arr[0] = Buffer.from(headers)
 		return Buffer.concat(arr)
 	}
 	normalize(from = ''){
-		const display = Mail.getDisplayName(super.get('from') ?? '')
 		if(from){
+			const display = Mail.getDisplayName(super.get('from') ?? '')
 			from = from.trim()
 			super.set('from', display ? from[0] == '<' ? display+' '+from : `${display} <${from}>` : from)
 		}
@@ -79,12 +87,12 @@ export class Mail extends Map{
 		for(let i = 0; i < 4; i++) rand[i] = Math.floor(Math.random() * 4294967296)
 		return `<pplane-${now}-${Buffer.from(rand.buffer).toString('base64url')}@${Mail.getServer(from)}>`
 	}
-	get id(){
+	id(){
 		let id = super.get('message-id')
 		if(!id) super.set('message-id', id = this.#genId())
 		return id
 	}
-	get size(){
+	estimateSize(){
 		let i = this.body.length + 2
 		for(const {0:k,1:v} of this) i += k.length + v.length + 4
 		return i
@@ -138,7 +146,6 @@ export class Mail extends Map{
 		const sep = buf.indexOf('\n\r\n')
 		let body = sep >= 0 ? buf.slice(sep+3) : Buffer.alloc(0)
 		if(!chunking){
-			if(body.toString('ascii', -5) == '\r\n.\r\n') body = body.subarray(0, -5)
 			// dot unstuff
 			let i = 0
 			const arr = []
@@ -178,10 +185,19 @@ export class Mail extends Map{
 		return m
 	}
 }
-const prewritten = ['from', 'date', 'subject', 'content-type', 'message-id', 'mime-version']
+const knownHeaders = new Map()
+	.set('from', 'From').set('date', 'Date').set('subject', 'Subject')
+	.set('content-type', 'Content-Type').set('message-id', 'Message-ID').set('mime-version', 'MIME-Version')
+	.set('dkim-signature', 'DKIM-Signature')
 
 const end = Buffer.from('\r\n.\r\n')
 const _internedBuffers = {
 	end, newline: end.subarray(0, 2),
 	dot: end.subarray(2, 3)
+}
+
+export function uniqueId(){
+	const rand = new Int32Array(4)
+	for(let i = 0; i < 4; i++) rand[i] = Math.floor(Math.random() * 4294967296)
+	return `pplane-${Math.floor(Date.now()*.001)}-${Buffer.from(rand.buffer).toString('base64url')}`
 }

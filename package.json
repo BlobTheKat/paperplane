@@ -13,5 +13,7 @@
 	"author": "BlobTheKat",
 	"license": "GPL-3.0-only",
 	"description": "4-way mail client/server",
-	"type": "module"
+	"github": "https://github.com/BlobTheKat/paperplane",
+	"type": "module",
+	"scripts": { "start": "node cli.js" }
 }

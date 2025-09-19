@@ -35,7 +35,7 @@ export class SpamAssassin extends Map{
 		this.secure = secure
 	}
 	check(msg, ip = '', threshold = this.threshold){ return new Promise(r => {
-		const res = { code: -1, score: NaN, threshold, get spam(){ return this.score >= this.threshold || this.blocked }, symbols: [], blocked: false }
+		const res = { code: -1, score: NaN, threshold, get spam(){ return this.score >= this.threshold }, symbols: [], blocked: false }
 		let todo = 1
 		if(ip){
 			todo++
@@ -88,7 +88,6 @@ export class SpamAssassin extends Map{
 		let respData = ''
 		sock.on('data', ch => respData += ch)
 		sock.on('end', () => {
-			console.log(respData)
 			let split = respData.indexOf('\r\n\r\n')
 			if(split < 0) split = respData.length
 			let h = respData.slice(0, split)

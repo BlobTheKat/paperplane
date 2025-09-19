@@ -60,7 +60,7 @@ export class POPServer{
 	onSetExpireRequest = null
 
 	#handler(sock){
-		this.debug?.('New client on ' + (sock instanceof TLSSocket ? 'POP STLS' : 'POPS') + ' port')
+		this.debug?.('POP>>New client on ' + (sock instanceof TLSSocket ? 'POP STLS' : 'POPS') + ' port')
 		const buffered = []
 		let user = '', auth = null
 		const toDelete = new Set
@@ -68,7 +68,7 @@ export class POPServer{
 		if(this.debug){
 			const w = sock.write
 			sock.write = (buf) => {
-				this.debug?.('\x1b[33mS: %s\x1b[m', buf.toString().trimEnd())
+				this.debug?.('POP>>\x1b[33mS: %s\x1b[m', buf.toString().trimEnd())
 				w.call(sock, buf)
 			}
 		}
@@ -83,7 +83,7 @@ export class POPServer{
 				const line = Buffer.concat(buffered).toString().trim()
 				buffered.length = 0
 				let split = line.indexOf(' ')+1 || line.length+1
-				this.debug?.('\x1b[32mC: %s\x1b[m', line)
+				this.debug?.('POP>>\x1b[32mC: %s\x1b[m', line)
 				const getMessages = cb => {
 					if(typeof this.checkAuth == 'function' ? !this.checkAuth(auth) : this.checkAuth && !auth)
 						return void cb([])
@@ -109,7 +109,7 @@ export class POPServer{
 						if(this.debug){
 							const w = sock.write
 							sock.write = (buf) => {
-								this.debug?.('\x1b[33mS: %s\x1b[m', buf.toString().trimEnd())
+								this.debug?.('POP>>\x1b[33mS: %s\x1b[m', buf.toString().trimEnd())
 								w.call(sock, buf)
 							}
 						}
@@ -165,13 +165,13 @@ export class POPServer{
 								const fail = typeof this.checkAuth == 'function' ? !this.checkAuth(auth) : this.checkAuth && !auth
 								const r = fail ? null : this.onFetchMessage?.(auth, m[idx])
 								if(typeof r?.then == 'promise') r.then(r => {
-									buf = r ? r.toBuffer() : undefined
+									buf = r ? r.toBuffer(null, '', false) : undefined
 									if(buf){
 										sock.write('+OK '+buf.length+' bytes\r\n')
 										sock.write(buf)
 									}else sock.write('-ERR Email not available\r\n')
 								}, _ => { sock.write('-ERR Email not available\r\n') })
-								else buf = r ? r.toBuffer() : undefined
+								else buf = r ? r.toBuffer(null, '', false) : undefined
 							}catch(e){ Promise.reject(e) }
 							if(buf){
 								sock.write('+OK '+buf.length+' bytes\r\n')

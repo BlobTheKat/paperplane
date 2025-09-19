@@ -66,7 +66,7 @@ export class SMTPClient extends Map{
 		}
 		const cbs = [cb]
 		this.#sessions.set(hostname, cbs)
-		this.debug?.('Resolving %s...', hostname)
+		this.debug?.('SMTPCLI>>Resolving %s...', hostname)
 		resolveMx(hostname, (_, recs) => {
 			const targets = recs?.length ?
 				recs.sort((a, b) => b.priority - a.priority).map(a => a.exchange)
@@ -77,21 +77,21 @@ export class SMTPClient extends Map{
 
 	#connect(hostname, targets, retry, cbs){
 		if(!targets.length){
-			this.debug?.('No available server found for @%s', hostname)
+			this.debug?.('SMTPCLI>>No available server found for @%s', hostname)
 			this.#sessions.set(hostname, Date.now() + 3600e3)
 			for(const c of cbs) c(null)
 			return
 		}
 		let stage = 0
-		this.debug?.('Trying '+targets[targets.length-1]+':25')
+		this.debug?.('SMTPCLI>>Trying '+targets[targets.length-1]+':25')
 		let sock = net.createConnection(25, targets[targets.length-1], () => {
-			this.debug?.('Connected!')
+			this.debug?.('SMTPCLI>>Connected!')
 			if(!retry) sock.write(`EHLO ${this.host}\r\n`)
 		})
 		sock.setKeepAlive(true, 60e3)
 		sock.setTimeout(60e3)
 		if(this.debug) sock.write = buf => {
-			this.debug?.('\x1b[32mC: %s\x1b[m', buf.toString().trim())
+			this.debug?.('SMTPCLI>>\x1b[32mC: %s\x1b[m', buf.toString().trim())
 			net.Socket.prototype.write.call(sock, buf)
 		}
 		const buffered = []
@@ -110,7 +110,7 @@ export class SMTPClient extends Map{
 				i = j+1
 				const line = Buffer.concat(buffered).toString().trim()
 				buffered.length = 0
-				this.debug?.('\x1b[33mS: %s\x1b[m', line)
+				this.debug?.('SMTPCLI>>\x1b[33mS: %s\x1b[m', line)
 				if(stage > 2){
 					if(lineCb) lineCb(line)
 					else linesBuffered.push(line)
@@ -177,13 +177,13 @@ export class SMTPClient extends Map{
 						sock.removeAllListeners('data')
 						sock.removeAllListeners('error')
 						sock.removeAllListeners('close')
-						this.debug?.('Upgrading to TLS...')
+						this.debug?.('SMTPCLI>>Upgrading to TLS...')
 						sock = connect(sock, { socket: sock, servername: targets[targets.length-1] }, () => {
-							this.debug?.('TLS connected!')
+							this.debug?.('SMTPCLI>>TLS connected!')
 							if(!retry) sock.write(`EHLO ${this.host}\r\n`)
 						})
 						if(this.debug) sock.write = buf => {
-							this.debug?.('\x1b[32mC: %s\x1b[m', buf.toString().trim())
+							this.debug?.('SMTPCLI>>\x1b[32mC: %s\x1b[m', buf.toString().trim())
 							TLSSocket.prototype.write.call(sock, buf)
 						}
 						sock.on('data', ondata)
@@ -196,7 +196,7 @@ export class SMTPClient extends Map{
 		const err = v => {
 			if(v === true) return // on('close') where on('error') was also called
 
-			this.debug?.('Failed: '+v)
+			this.debug?.('SMTPCLI>>Failed: '+v)
 
 			// 3 for network issues, 2 for clean closes
 			if(++retry < 3 - (v === false)) return this.#connect(hostname, targets, retry, cbs)
@@ -226,7 +226,8 @@ export class SMTPClient extends Map{
 
 	/**
 	 * Send an email using the current configuration.
-	 * @param {string} from Send from this email. Domain should be covered by a DKIM private key (see setPrivateKey())
+	 * @param {string} from It is good practice to set from parameter to the same as the Mail `From` header, but not always a requirement. The `From` header will be shown to the recipient when present, falling back to this value when absent.
+	 * Note that the email's `From` header should be covered by a DKIM private key (see setPrivateKey()), eg user@domain-i-control.com else DKIM may fail and the email may be rejected as spam
 	 * @param {string|string[]} to Recipient(s) to send the email to
 	 * @param {Mail} mail Mail object to send. Some headers will be normalized or added to maximize chance of delivery (e.g `Message-ID`, `DKIM-Signature`, `Date`, ...)
 	 * @returns {Promise<string[]>} a list of recipients for which delivery failed
@@ -236,32 +237,25 @@ export class SMTPClient extends Map{
 		from = from.trim()
 		const failed = []
 		let todo = 1
-		const fin = _ => --todo || r(failed.flat(1))
+		const fin = f => { if(f) failed.push(f); --todo || r(failed.flat(1)) }
 		if(transport) this.getSession(transport, sock =>
-			this.#send(sock, from, to = Array.isArray(to) ? to.map(a => a.trim()) : [to.trim()], body, failed).then(fin, () => (failed.push(to), fin())))
+			this.#send(sock, from, to = Array.isArray(to) ? to.map(a => a.trim()) : [to.trim()], body).then(fin, () => (failed.push(to), this.debug?.(e), fin())))
 		else if(Array.isArray(to)){
-			if(!to.length) return
-			const toHere = [to[0].trim()], toElsewhere = new Map()
-			const server = Mail.getServer(toHere[0])
-			for(let i = to.length-1; i > 0; i--){
-				const email = to[i].trim(), ser = Mail.getServer(email)
-				if(ser == server){
-					toHere.push(email)
-					continue
-				}
-				let arr = toElsewhere.get(ser)
-				if(!arr) toElsewhere.set(ser, arr = [email])
+			if(!to.length) return r([])
+			const targets = new Map()
+			for(const email of to){
+				const ser = Mail.getServer(email)
+				let arr = targets.get(ser)
+				if(!arr) targets.set(ser, arr = [email])
 				else arr.push(email)
 			}
-			to = toHere
-			todo = toElsewhere.size + 1
-			for(const {0:ser,1:tos} of toElsewhere)
-				this.getSession(ser, sock => this.#send(sock, from, tos, body, failed).then(fin, () => (failed.push(tos), fin())))
-			this.getSession(server, sock => this.#send(sock, from, toHere, body, failed).then(fin, () => (failed.push(toHere), fin())))
+			todo = targets.size
+			for(const {0:ser,1:tos} of targets)
+				this.getSession(ser, sock => this.#send(sock, from, tos, body).then(fin, e => (failed.push(tos), this.debug?.(e), fin())))
 		}else this.getSession(Mail.getServer(to), sock =>
-			this.#send(sock, from, [to = to.trim()], body, failed).then(fin, () => (failed.push(to), fin())))
+			this.#send(sock, from, [to = to.trim()], body).then(fin, e => (failed.push(to), this.debug?.(e), fin())))
 	}) }
-	async #send(sock, from, to, body, failed){
+	async #send(sock, from, to, body){
 		if(!sock) throw null
 		const wait = !(sock.extensions & PIPELINING), suffix = sock.extensions & SMTPUTF8 ? ' SMTPUTF8' : ''
 		const suffix2 = suffix + (!(~sock.extensions & (BINARYMIME | CHUNKING)) ? ' BODY=BINARYMIME'  : sock.extensions & MIMEUTF8 ? ' BODY=8BITMIME' : '')
@@ -288,6 +282,6 @@ export class SMTPClient extends Map{
 			sock.write(body.dot ??= body.mail.toBuffer(this, from, false))
 		}
 		if(!(await sock.line()).startsWith('250')) throw null
-		if(f.length) failed.push(f)
+		return f
 	}
 }

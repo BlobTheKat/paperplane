@@ -11,6 +11,8 @@ export class SMTPServer extends Set{
 	maxMessageBody = 25 * 1048576
 	/**
 	 * Called when a server sends us incoming mail.
+	 * Note that in practice, `from` is often modified to contain the bounce email for the email relayer. You should instead check mail.get('from') to get the original sender
+	 * Likewise `tos` will likely be filtered to only contain recipients the relayer thought relevant to us
 	 * @type (auth: any?, from: string, tos: string[], mail: Mail, rawMail: Buffer) => string?
 	 * @returns An info message if delivery failed, or null if it succeeded
 	 */
@@ -51,6 +53,8 @@ export class SMTPServer extends Set{
 	maxRecipients = 50
 	/**
 	 * Whether to reject all emails by default
+	 * true => Reject all emails except those whose domain was added as an exception ('allowlist')
+	 * false => Accept all emails except those whose domain was added as an exception ('blocklist')
 	 */
 	reject = false
 	/**
@@ -75,11 +79,12 @@ export class SMTPServer extends Set{
 
 	#tlsOptions = null
 	#handler(type, sock){
-		this.debug?.('New client on ' + ['SMTP', 'SMTPS', 'STLS'][type] + ' port')
+		const debugPrefix = type ? 'SMTPFWD>>' : 'SMTPSER>>'
+		this.debug?.(debugPrefix+'New client on ' + ['SMTP', 'SMTPS', 'STLS'][type] + ' port')
 		if(this.debug){
 			const w = sock.write
 			sock.write = (buf) => {
-				this.debug?.('\x1b[33mS: %s\x1b[m', buf.toString().trimEnd())
+				this.debug?.(debugPrefix+'\x1b[33mS: %s\x1b[m', buf.toString().trimEnd())
 				w.call(sock, buf)
 			}
 		}
@@ -97,11 +102,11 @@ export class SMTPServer extends Set{
 					if(bodyToRead > buf.length-i){
 						bodyToRead -= buf.length-i
 						body.push(i ? buf.subarray(i) : buf)
-						this.debug?.('\x1b[32mC:(%d bytes)\x1b[m', buf.length-i)
+						this.debug?.(debugPrefix+'\x1b[32mC:(%d bytes)\x1b[m', buf.length-i)
 						return
 					}
 					body.push(bodyToRead == buf.length ? (i = bodyToRead, buf) : buf.subarray(i, i += bodyToRead))
-					this.debug?.('\x1b[32mC:(%d bytes) fin\x1b[m', bodyToRead)
+					this.debug?.(debugPrefix+'\x1b[32mC:(%d bytes) fin\x1b[m', bodyToRead)
 					bodyToRead = 0
 					if(stage == 5){
 						if(typeof this.checkAuth == 'function' ? !this.checkAuth(auth, !type) : type && this.checkAuth && !auth){
@@ -125,7 +130,7 @@ export class SMTPServer extends Set{
 					const j = buf.indexOf(10, i1)
 					if(j < 0){
 						body.push(i ? buf.subarray(i) : buf)
-						this.debug?.('\x1b[32mC:(%d bytes)\x1b[m', buf.length-i)
+						this.debug?.(debugPrefix+'\x1b[32mC:(%d bytes)\x1b[m', buf.length-i)
 						return
 					}
 					let k = j, b = buf, bi = body.length
@@ -136,7 +141,7 @@ export class SMTPServer extends Set{
 					if(k < 0){ i1 = j+1; continue }
 					if(j+1 > i){
 						body.push(buf.subarray(i, j+1))
-						this.debug?.('\x1b[32mC:(%d bytes) fin\x1b[m', j+1-i)
+						this.debug?.(debugPrefix+'\x1b[32mC:(%d bytes) fin\x1b[m', j+1-i)
 					}
 					if(typeof this.checkAuth == 'function' ? !this.checkAuth(auth, !type) : type && this.checkAuth && !auth){
 						sock.write('530 Unauthenticated\r\n')
@@ -145,7 +150,7 @@ export class SMTPServer extends Set{
 					let err = ''
 					stage = 0
 					try{
-						const rawBody = Buffer.concat(body)
+						const rawBody = Buffer.concat(body).subarray(0, -5)
 						const r = (type ? this.onOutgoing : this.onIncoming)?.call(this, auth, from, tos.slice(), Mail.fromBuffer(rawBody, false), rawBody, sock.remoteAddress)
 						if(typeof r?.then != 'function') err = r ?? ''
 					}catch(e){ console.error(e); err = 1 }
@@ -164,7 +169,7 @@ export class SMTPServer extends Set{
 				i = j+1
 				const line = Buffer.concat(buffered).toString().trim()
 				buffered.length = 0
-				this.debug?.('\x1b[32mC: %s\x1b[m', line)
+				this.debug?.(debugPrefix+'\x1b[32mC: %s\x1b[m', line)
 
 				switch(stage){
 					// AUTH LOGIN
@@ -241,7 +246,7 @@ export class SMTPServer extends Set{
 					if(this.debug){
 						const w = sock.write
 						sock.write = (buf) => {
-							this.debug?.('\x1b[33mS: %s\x1b[m', buf.toString().trimEnd())
+							this.debug?.(debugPrefix+'\x1b[33mS: %s\x1b[m', buf.toString().trimEnd())
 							w.call(sock, buf)
 						}
 					}
