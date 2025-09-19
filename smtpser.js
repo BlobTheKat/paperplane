@@ -1,16 +1,9 @@
 import net from 'net'
 import tls, { TLSSocket } from 'tls'
 import { Mail } from './mail.js'
-import { SpamAssassinClient } from './spamc.js'
 
 export class SMTPServer extends Set{
 	debug = null
-
-	/**
-	 * SpamAssasin client which implements .get(mail: string): Promise<{spam: boolean}>
-	 * @type import('./spamc.js').SpamAssassinClient
-	 */
-	spamAssasin = null
 
 	/**
 	 * Maximum message body in bytes. Default: 25MB
@@ -119,7 +112,7 @@ export class SMTPServer extends Set{
 						stage = 0
 						try{
 							const rawBody = Buffer.concat(body)
-							const r = (type ? this.onOutgoing : this.onIncoming)?.call(this, auth, from, tos.slice(), Mail.fromBuffer(rawBody, true), rawBody)
+							const r = (type ? this.onOutgoing : this.onIncoming)?.call(this, auth, from, tos.slice(), Mail.fromBuffer(rawBody, true), rawBody, sock.remoteAddress)
 							if(typeof r?.then != 'function') err = r ?? ''
 						}catch(e){ console.error(e); err = 1 }
 						sock.write(err ? '550 '+(typeof err == 'string' ? err.replace(/[\r\n]/g, ' ') : 'Internal server error')+'\r\n' : '250 Message queued\r\n')
@@ -153,7 +146,7 @@ export class SMTPServer extends Set{
 					stage = 0
 					try{
 						const rawBody = Buffer.concat(body)
-						const r = (type ? this.onOutgoing : this.onIncoming)?.call(this, auth, from, tos.slice(), Mail.fromBuffer(rawBody, false), rawBody)
+						const r = (type ? this.onOutgoing : this.onIncoming)?.call(this, auth, from, tos.slice(), Mail.fromBuffer(rawBody, false), rawBody, sock.remoteAddress)
 						if(typeof r?.then != 'function') err = r ?? ''
 					}catch(e){ console.error(e); err = 1 }
 					sock.write(err ? '550 '+(typeof err == 'string' ? err.replace(/[\r\n]/g, ' ') : 'Internal server error')+'\r\n' : '250 Message queued\r\n')

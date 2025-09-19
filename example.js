@@ -3,7 +3,7 @@ import { POPServer } from "./popser.js"
 import { SMTPClient } from "./smtpcli.js"
 import { SMTPServer } from "./smtpser.js"
 import fs from 'fs'
-import { SpamAssassinClient } from "./spamc.js"
+import { SpamAssassin } from "./spamc.js"
 
 const cli = new SMTPClient('blobk.at', 'dkim.key', 'mail2')
 
@@ -22,8 +22,8 @@ console.log('\x1b[32mPOP servers listening on :110, :995\x1b[m')
 
 // Check that `auth` is truthy before accepting commands or calling onOutgoing()
 smtpServer.checkAuth = true
-smtpServer.onOutgoing = (auth, from, tos, mail) => {
-	console.log('\x1b[35mOutgoing from %s to %s\nheaders: %d, body: %d bytes', from, tos, mail.headerCount, mail.body.length)
+smtpServer.onOutgoing = (auth, from, tos, mail, _, ip) => {
+	console.log('\x1b[35mOutgoing from %s to %s\nIP: %s, headers: %d, body: %d bytes', from, tos, ip, mail.headerCount, mail.body.length)
 	// from is guaranteed to match our filter ['blobk.at']
 	if(Mail.getLocal(from) != auth.user) return 'Not allowed to send from that email'
 	mail.normalize(from)
@@ -35,17 +35,22 @@ smtpServer.onOutgoing = (auth, from, tos, mail) => {
 	})
 }
 
-const spamc = new SpamAssassinClient('/var/run/spamd.sock', 0)
-smtpServer.onIncoming = async (_, from, tos, mail, raw) => {
-	console.log('\x1b[35mIncoming from %s to %s\nheaders: %d, body: %d bytes', from, tos, mail.headerCount, mail.body.length)
-	const spam = await spamc.get(raw)
+const spamc = new SpamAssassin('/var/run/spamd.sock', 0)
+// Heavily penalize unsigned/incorrectly signed emails
+spamc.set('DKIM_SIGNED', 3.5)
+spamc.set('DKIM_VALID', -3.5)
+smtpServer.onIncoming = async (_, from, tos, mail, raw, ip) => {
+	console.log('\x1b[35mIncoming from %s to %s\nIP: %s, headers: %d, body: %d bytes', from, tos, ip, mail.headerCount, mail.body.length)
+	const spam = await spamc.check(raw, ip)
 	if(spam.spam){
-		console.log('\x1b[31mMessage flagged as spam\x1b[m')
+		console.log('\x1b[31mMessage flagged as spam with score %d and:\n\x1b[m%s', spam.score, spam.symbols.join(' ')+(spam.blocked ? ' SPAMHAUS_IP_BLOCKED':''))
 		return 'Message flagged as spam'
+	}else{
+		console.log('\x1b[33mMessage passed spam test with score %d and:\n\x1b[m%s', spam.score, spam.symbols.join(' '))
 	}
 
 	// tos is guaranteed to all match our filter ['blobk.at']
-	mail.normalize(from)
+	mail.normalize() //from)
 	let count = 0
 	for(let to of tos){
 		const i = inboxes.get(to = Mail.getLocal(to) || to)
