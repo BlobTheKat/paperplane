@@ -107,8 +107,8 @@ export class SMTPServer extends Set{
 						this.debug?.('\x1b[32mC:(%d bytes)\x1b[m', buf.length-i)
 						return
 					}
-					body.push(bodyToRead == buf.length ? buf : buf.subarray(i, i+bodyToRead))
-					this.debug?.('\x1b[32mC:(%d bytes) LAST\x1b[m', bodyToRead)
+					body.push(bodyToRead == buf.length ? (i = bodyToRead, buf) : buf.subarray(i, i += bodyToRead))
+					this.debug?.('\x1b[32mC:(%d bytes) fin\x1b[m', bodyToRead)
 					bodyToRead = 0
 					if(stage == 5){
 						if(typeof this.checkAuth == 'function' ? !this.checkAuth(auth, !type) : type && this.checkAuth && !auth){
@@ -143,7 +143,7 @@ export class SMTPServer extends Set{
 					if(k < 0){ i1 = j+1; continue }
 					if(j+1 > i){
 						body.push(buf.subarray(i, j+1))
-						this.debug?.('\x1b[32mC:(%d bytes) LAST\x1b[m', j+1-i)
+						this.debug?.('\x1b[32mC:(%d bytes) fin\x1b[m', j+1-i)
 					}
 					if(typeof this.checkAuth == 'function' ? !this.checkAuth(auth, !type) : type && this.checkAuth && !auth){
 						sock.write('530 Unauthenticated\r\n')
@@ -220,7 +220,7 @@ export class SMTPServer extends Set{
 						continue
 					}
 					bodyToRead = len
-					stage = 4 + data.slice(-5).toUpperCase() == ' LAST'
+					stage = 4 + (data.slice(-5).toUpperCase() == ' LAST')
 					continue
 				}
 				if(!hostname){
@@ -374,8 +374,7 @@ export class SMTPServer extends Set{
 						break
 					}
 					bodyToRead = len
-					stage = 4 + data.slice(-5).toUpperCase() == ' LAST'
-					sock.write('250 Received\r\n')
+					stage = 4 + (data.slice(-5).toUpperCase() == ' LAST')
 				} break
 				case 'QUIT':
 					sock.write('221 Bye\r\n')
