@@ -1,20 +1,17 @@
 {
-  "name": "paperplane-mailer",
-  "version": "1.0.0",
-  "main": "index.js",
-  "keywords": [
-    "mail",
-    "smtp",
-    "deliverable",
-    "email",
-    "pop3",
-    "smtps"
-  ],
-  "author": "BlobTheKat",
-  "license": "GPL-3.0-only",
-  "description": "4-way mail client/server",
-  "type": "module",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  }
+	"name": "paperplane-mailer",
+	"version": "1.0.0",
+	"main": "index.js",
+	"keywords": [
+		"mail",
+		"smtp",
+		"deliverable",
+		"email",
+		"pop3",
+		"smtps"
+	],
+	"author": "BlobTheKat",
+	"license": "GPL-3.0-only",
+	"description": "4-way mail client/server",
+	"type": "module"
 }

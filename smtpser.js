@@ -1,22 +1,30 @@
-import net, { Socket } from 'net'
+import net from 'net'
 import tls, { TLSSocket } from 'tls'
 import { Mail } from './mail.js'
+import { SpamAssassinClient } from './spamc.js'
 
 export class SMTPServer extends Set{
 	debug = null
+
+	/**
+	 * SpamAssasin client which implements .get(mail: string): Promise<{spam: boolean}>
+	 * @type import('./spamc.js').SpamAssassinClient
+	 */
+	spamAssasin = null
+
 	/**
 	 * Maximum message body in bytes. Default: 25MB
 	 */
 	maxMessageBody = 25 * 1048576
 	/**
 	 * Called when a server sends us incoming mail.
-	 * @type (from: string, tos: string[], mail: Mail, auth: any?) => string?
+	 * @type (auth: any?, from: string, tos: string[], mail: Mail, rawMail: Buffer) => string?
 	 * @returns An info message if delivery failed, or null if it succeeded
 	 */
 	onIncoming = null
 	/**
 	 * Called when a client submits mail to be delivered on their behalf.
-	 * @type (from: string, tos: string[], mail: Mail, auth: any?) => string?
+	 * @type (auth: any?, from: string, tos: string[], mail: Mail, rawMail: Buffer) => string?
 	 * @returns An info message if delivery failed, or null if it succeeded
 	 * If you are forwarding the email, consider replying with a success right away and deferring the send to reduce latency.
 	 */
@@ -27,7 +35,7 @@ export class SMTPServer extends Set{
 	 * The default handler will return an object in the shape { user, pass, isServer }
 	 * @returns an object (or promise to an object) that will be passed to onIncoming/onOutgoing
 	 * Throw an error to indicate authentication failure. Returning null or undefined will make it appear to the client as if authentication succeeds.
-	 * Note that onIncoming/onOutgoing may still be fired at any time irrespective of onAuthenticate, it is up to you to verify within those handlers that the client has permission to send based on the auth parameter. By default, if no authentication occured, the auth parameter will be null
+	 * Note that onIncoming/onOutgoing may still be fired at any time irrespective of onAuthenticate unless checkAuth is set appropriately. In such cases the `auth` parameter will be null
 	 */
 	onAuthenticate = (user, pass, isServer) => {
 		return { user: Mail.getLocal(user) || user, pass, isServer }
@@ -71,6 +79,7 @@ export class SMTPServer extends Set{
 	 * See addException()
 	 */
 	hasException(server){ return super.has(server.toLowerCase()) }
+
 	#tlsOptions = null
 	#handler(type, sock){
 		this.debug?.('New client on ' + ['SMTP', 'SMTPS', 'STLS'][type] + ' port')
@@ -107,13 +116,14 @@ export class SMTPServer extends Set{
 							break
 						}
 						let err = ''
-						try{
-							err = (type ? this.onOutgoing : this.onIncoming)?.(from, tos, Mail.fromBuffer(Buffer.concat(body), true), auth) ?? ''
-						}catch(e){ Promise.reject(e); err = 1 }
 						stage = 0
+						try{
+							const rawBody = Buffer.concat(body)
+							const r = (type ? this.onOutgoing : this.onIncoming)?.call(this, auth, from, tos.slice(), Mail.fromBuffer(rawBody, true), rawBody)
+							if(typeof r?.then != 'function') err = r ?? ''
+						}catch(e){ console.error(e); err = 1 }
 						sock.write(err ? '550 '+(typeof err == 'string' ? err.replace(/[\r\n]/g, ' ') : 'Internal server error')+'\r\n' : '250 Message queued\r\n')
-						body.length = 0
-						bodyLen = 0
+						body.length = bodyLen = 0
 						from = ''; tos.length = 0
 					}else sock.write('250 Received\r\n')
 				}
@@ -140,17 +150,18 @@ export class SMTPServer extends Set{
 						break
 					}
 					let err = ''
-					try{
-						err = (type ? this.onOutgoing : this.onIncoming)?.(from, tos, Mail.fromBuffer(Buffer.concat(body), false), auth) ?? ''
-					}catch(e){ Promise.reject(e); err = 1 }
 					stage = 0
+					try{
+						const rawBody = Buffer.concat(body)
+						const r = (type ? this.onOutgoing : this.onIncoming)?.call(this, auth, from, tos.slice(), Mail.fromBuffer(rawBody, false), rawBody)
+						if(typeof r?.then != 'function') err = r ?? ''
+					}catch(e){ console.error(e); err = 1 }
 					sock.write(err ? '550 '+(typeof err == 'string' ? err.replace(/[\r\n]/g, ' ') : 'Internal server error')+'\r\n' : '250 Message queued\r\n')
-					body.length = 0
-					bodyLen = 0
+					body.length = bodyLen = 0
 					from = ''; tos.length = 0
 					i = j+1
 					break
-				} }
+				} if(i >= buf.length) return }
 				const j = buf.indexOf(10, i)
 				if(j < 0){
 					buffered.push(new Uint8Array(buf.buffer, buf.byteOffset + i, buf.length - i))
@@ -188,6 +199,9 @@ export class SMTPServer extends Set{
 							sock.write('535 Invalid credentials\r\n')
 						}
 						user = ''; stage = 0
+						continue loop
+					case -1:
+						sock.write('503 Bad order\r\n')
 						continue loop
 				}
 
@@ -238,9 +252,9 @@ export class SMTPServer extends Set{
 							w.call(sock, buf)
 						}
 					}
-					sock.once('secureConnect', () => sock.write('220 '+this.hostWatermark+' ESMTP Paperplane\r\n'))
+					sock.on('secureConnect', () => sock.write('220 '+this.hostWatermark+' ESMTP Paperplane\r\n'))
 					sock.on('data', ondata)
-					sock.once('error', () => sock.destroy())
+					sock.on('error', () => sock.destroy())
 					hostname = ''
 					break
 				}
@@ -380,7 +394,7 @@ export class SMTPServer extends Set{
 			}
 		}
 		sock.on('data', ondata)
-		sock.once('error', () => sock.destroy())
+		sock.on('error', () => sock.destroy())
 	}
 	/**
 	 * Create an SMTP server
@@ -406,9 +420,8 @@ export class SMTPServer extends Set{
 	/**
 	 * @param {import('tls').SecureContextOptions} opts TLS options (certificate, ...)
 	 */
-	async listen(tlsOpts, host, smtpPort = 25, smtpsPort = 465, stlsPort = 587){
+	async listen(tlsOpts, host = '0.0.0.0', smtpPort = 25, smtpsPort = 465, stlsPort = 587){
 		if(tlsOpts) this.#tlsOptions = tlsOpts
-		if(typeof host == 'function') cb = host, host = ''
 		return new Promise(r => {
 			let todo = 0, done = () => --todo||r()
 			if(smtpPort && !this.#smtpServer)
@@ -417,6 +430,7 @@ export class SMTPServer extends Set{
 				this.#smtpsServer = tls.createServer(tlsOpts, this.#handler.bind(this, 1)).listen(smtpsPort, host, done), todo++
 			if(stlsPort && !this.#stlsServer)
 				this.#stlsServer = net.createServer(this.#handler.bind(this, 2)).listen(stlsPort, host, done), todo++
+			if(!todo) r()
 		})
 	}
 }

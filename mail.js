@@ -1,7 +1,7 @@
 import crypto from 'crypto'
 
 export class Mail extends Map{
-	#body; #bh = ''
+	#body
 	constructor(a, b){
 		super()
 		if(typeof a == 'object' && !(a instanceof Uint8Array) && !(a instanceof ArrayBuffer)){
@@ -16,14 +16,13 @@ export class Mail extends Map{
 	hasHeader(k){ return super.has(k) }
 	set body(a){
 		this.#body = Buffer.from(a || '')
-		this.#bh = ''
 	}
 	get body(){ return this.#body }
-	toBuffer(norm = null, from, chunking = false){
+	toBuffer(norm = null, from = '', chunking = false){
 		// Assume utf-8 support
 		let headers = ''
 		const arr = [null]
-		const h = norm && !this.#bh ? crypto.createHash('sha256') : null
+		const h = norm ? crypto.createHash('sha256') : null
 		if(!chunking){
 			// dot stuffing
 			let i = 0
@@ -48,13 +47,12 @@ export class Mail extends Map{
 			arr.push(this.#body)
 			if(h) h.update(this.#body)
 		}
-		if(h) this.#bh = h.digest('base64')
 		if(norm){
 			const host = Mail.getServer(from)
 			if(!host) throw "Invalid 'From:' email address"
 			const key = norm.get(host) ?? norm.privKey
 			const now = Math.floor(Date.now()*.001)+''
-			headers = `From: ${super.get('from') ?? from}\r\nDate: ${super.get('date') ?? new Date().toUTCString().replace('GMT', '+0000')}\r\nSubject: ${super.get('subject') ?? ''}\r\nContent-Type: ${super.get('content-type') ?? 'text/plain;charset=utf-8'}\r\nMIME-Version: 1.0\r\nMessage-ID: ${super.get('message-id') ?? `<pplane-${now}-${this.#bh.slice(0,-1)}@${host}>`}\r\nDKIM-Signature: v=1;a=rsa-sha256;d=${host};s=${key.selector};h=from:date:subject:content-type:mime-version:message-id;t=${now};bh=${this.#bh};b=`
+			headers = `From: ${super.get('from') ?? from}\r\nDate: ${super.get('date') ?? new Date().toUTCString().replace('GMT', '+0000')}\r\nSubject: ${super.get('subject') ?? ''}\r\nContent-Type: ${super.get('content-type') ?? 'text/plain;charset=utf-8'}\r\nMIME-Version: ${super.get('mime-version') ?? '1.0'}\r\nMessage-ID: ${super.get('message-id') ?? this.#genId(now, from)}\r\nDKIM-Signature: v=1;a=rsa-sha256;d=${host};s=${key.selector};h=from:date:subject:content-type:mime-version:message-id;t=${now};bh=${h.digest('base64')};b=`
 			headers += crypto.sign(null, headers, key).toString('base64') + '\n'
 		}
 		for(const {0: k, 1: v} of this){
@@ -65,14 +63,33 @@ export class Mail extends Map{
 		arr[0] = Buffer.from(headers)
 		return Buffer.concat(arr)
 	}
-	normalize(from){
-		const display = Mail.getDisplayName(super.get('from'))
-		from = from.trim()
-		super.set('from', display ? from[0] == '<' ? display+' '+from : `${display} <${from}>` : from)
+	normalize(from = ''){
+		const display = Mail.getDisplayName(super.get('from') ?? '')
+		if(from){
+			from = from.trim()
+			super.set('from', display ? from[0] == '<' ? display+' '+from : `${display} <${from}>` : from)
+		}
 		const dateHeader = super.get('date')
 		if(!dateHeader || Number.isNaN(Date.parse(dateHeader))) super.set('date', new Date().toUTCString().replace('GMT', '+0000'))
-		
+		if(!super.has('message-id'))
+			super.set('message-id', this.#genId(undefined, from))
 	}
+	#genId(now = Math.floor(Date.now()*.001)+'', from = super.get('from')){
+		const rand = new Int32Array(4)
+		for(let i = 0; i < 4; i++) rand[i] = Math.floor(Math.random() * 4294967296)
+		return `<pplane-${now}-${Buffer.from(rand.buffer).toString('base64url')}@${Mail.getServer(from)}>`
+	}
+	get id(){
+		let id = super.get('message-id')
+		if(!id) super.set('message-id', id = this.#genId())
+		return id
+	}
+	get size(){
+		let i = this.body.length + 2
+		for(const {0:k,1:v} of this) i += k.length + v.length + 4
+		return i
+	}
+	get headerCount(){ return super.size }
 	static getServer(email){
 		const split = email.lastIndexOf('@') + 1
 		if(!split) return ''
@@ -117,7 +134,6 @@ export class Mail extends Map{
 		return email.trimEnd()
 	}
 	static fromBuffer(buf, chunking = false){
-		console.log(buf)
 		const m = new Mail()
 		const sep = buf.indexOf('\n\r\n')
 		let body = sep >= 0 ? buf.slice(sep+3) : Buffer.alloc(0)
@@ -135,6 +151,7 @@ export class Mail extends Map{
 			if(i < body.length) arr.push(body.subarray(i))
 			if(arr.length > 1) body = Buffer.concat(arr)
 		}
+		m.#body = body
 		let last = null, lastv = ''
 		for(const h of (sep >= 0 ? buf.toString('utf8', 0, sep) : buf.toString('utf8')).split('\n')){
 			if((h[0] == ' ' || h[0] == '\t') && typeof last == 'string'){
@@ -147,11 +164,24 @@ export class Mail extends Map{
 		}
 		return m
 	}
+	static encode(buf, m){
+		buf.u8arr(m.body)
+		buf.v32(m.size)
+		for(const {0: k, 1: v} of m)
+			buf.str(k), buf.str(v)
+	}
+	static decode(buf, m = new Mail()){
+		m.body = buf.u8arr()
+		let i = buf.v32()
+		while(i--)
+			m.setHeader(buf.str(), buf.str())
+		return m
+	}
 }
 const prewritten = ['from', 'date', 'subject', 'content-type', 'message-id', 'mime-version']
 
 const end = Buffer.from('\r\n.\r\n')
-export const _internedBuffers = {
+const _internedBuffers = {
 	end, newline: end.subarray(0, 2),
 	dot: end.subarray(2, 3)
 }

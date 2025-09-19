@@ -1,6 +1,6 @@
 import net from 'net'
 import { connect, TLSSocket } from 'tls'
-import { resolveMx, resolveTxt, reverse } from 'dns'
+import { resolveMx } from 'dns'
 import { Mail } from './mail.js'
 import crypto from 'crypto'
 import fs from 'fs'
@@ -10,19 +10,18 @@ export const PIPELINING = 1, MIMEUTF8 = 2, SMTPUTF8 = 4, CHUNKING = 8, BINARYMIM
 export class SMTPClient extends Map{
 	debug = null
 	#sessions = new Map()
-	constructor(host, key, selector = 'mail'){
+	privKey = null
+	constructor(host = 'mail.paperplane', key, selector = 'mail'){
 		super()
 		this.host = host
-		this.privKey = crypto.createPrivateKey({
-			format: 'pem',
-			key: typeof key != 'string' ? key : fs.readFileSync(key)+''
-		})
-		this.privKey.selector = selector
-		resolveTxt('mail._domainkey.' + host, (err, txt) => {
-			if(!txt)
-				console.warn('\x1b[33mNo published public key found for %s!', host)
-		})
+		if(key) this.setPrivateKey('', key, selector)
 	}
+	/**
+	 * Add a private key override
+	 * @param {string?} host Host for which to override the private key to use. Set to '' or null to set the default (fallback) private key
+	 * @param {string | Buffer} key Key contents (buffer) or file path (string). Should be in PEM format
+	 * @param {string} [selector] DMARC selector, as you set it in your DNS settings. Default value: 'mail'
+	 */
 	setPrivateKey(host, key, selector = 'mail'){
 		const privKey = crypto.createPrivateKey({
 			format: 'pem',
@@ -32,7 +31,11 @@ export class SMTPClient extends Map{
 		if(host) super.set(host, privKey)
 		else this.privKey = privKey
 	}
-	removePrivateKey(host){ super.delete(host) }
+	/**
+	 * Remove a private key override
+	 * @returns Whether the override existed (and thus was deleted)
+	 */
+	removePrivateKey(host){ return host ? super.delete(host) : this.privKey ? (this.privKey = null, true) : false }
 	getSession(hostname, cb){
 		if(!hostname) return void cb(null)
 		let sock = this.#sessions.get(hostname)
@@ -184,8 +187,8 @@ export class SMTPClient extends Map{
 							TLSSocket.prototype.write.call(sock, buf)
 						}
 						sock.on('data', ondata)
-						sock.once('error', err)
-						sock.once('close', err)
+						sock.on('error', err)
+						sock.on('close', err)
 				}
 			}
 		}
@@ -201,14 +204,14 @@ export class SMTPClient extends Map{
 			targets.pop()
 			this.#connect(hostname, targets, 0, cbs)
 		}
-		sock.once('timeout', () => {
+		sock.on('timeout', () => {
 			sock.removeAllListeners('error')
 			sock.removeAllListeners('close')
 			sock.end()
 			this.#sessions.delete(hostname)
 		})
-		sock.once('error', err)
-		sock.once('close', err)
+		sock.on('error', err)
+		sock.on('close', err)
 	}
 
 	flushCaches(){
@@ -221,6 +224,13 @@ export class SMTPClient extends Map{
 		}
 	}
 
+	/**
+	 * Send an email using the current configuration.
+	 * @param {string} from Send from this email. Domain should be covered by a DKIM private key (see setPrivateKey())
+	 * @param {string|string[]} to Recipient(s) to send the email to
+	 * @param {Mail} mail Mail object to send. Some headers will be normalized or added to maximize chance of delivery (e.g `Message-ID`, `DKIM-Signature`, `Date`, ...)
+	 * @returns {Promise<string[]>} a list of recipients for which delivery failed
+	 */
 	send(from, to, mail, transport = ''){ return new Promise(r => {
 		const body = { dot: null, chunked: null, mail }
 		from = from.trim()
@@ -233,7 +243,7 @@ export class SMTPClient extends Map{
 			if(!to.length) return
 			const toHere = [to[0].trim()], toElsewhere = new Map()
 			const server = Mail.getServer(toHere[0])
-			for(let i = to.length-1; i >= 0; i--){
+			for(let i = to.length-1; i > 0; i--){
 				const email = to[i].trim(), ser = Mail.getServer(email)
 				if(ser == server){
 					toHere.push(email)
@@ -253,9 +263,10 @@ export class SMTPClient extends Map{
 	}) }
 	async #send(sock, from, to, body, failed){
 		if(!sock) throw null
-		const wait = !(sock.extensions & PIPELINING), suffix = (sock.extensions & SMTPUTF8 ? ' SMTPUTF8' : '') + (!(~sock.extensions & (BINARYMIME | CHUNKING)) ? ' BODY=BINARYMIME'  : sock.extensions & MIMEUTF8 ? ' BODY=8BITMIME' : '')
+		const wait = !(sock.extensions & PIPELINING), suffix = sock.extensions & SMTPUTF8 ? ' SMTPUTF8' : ''
+		const suffix2 = suffix + (!(~sock.extensions & (BINARYMIME | CHUNKING)) ? ' BODY=BINARYMIME'  : sock.extensions & MIMEUTF8 ? ' BODY=8BITMIME' : '')
 		if(from[0] != '<') from = `<${from}>`
-		sock.write(`MAIL FROM:${from}\r\n`)
+		sock.write(`MAIL FROM:${from+suffix2}\r\n`)
 		if(wait && !(await sock.line()).startsWith('250')) throw null
 		const f = []
 		for(const rcpt of to){
