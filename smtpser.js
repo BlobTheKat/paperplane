@@ -311,7 +311,7 @@ export class SMTPServer extends Set{
 						sock.write('503 Wrong order\r\n')
 						break
 					}
-					const ser = Mail.getServer(p = p.slice(1, i))
+					const ser = Mail.getDomain(p = p.slice(1, i))
 					if(type && (!ser || (super.has(ser) ^ this.reject))){
 						sock.write('550 Server does not handle that email domain\r\n')
 						break
@@ -342,7 +342,7 @@ export class SMTPServer extends Set{
 						sock.write('550 Maximum number of recipients reached\r\n')
 						break
 					}
-					const ser = Mail.getServer(p = p.slice(1, i))
+					const ser = Mail.getDomain(p = p.slice(1, i))
 					if(!type && (!ser || (super.has(ser) ^ this.reject))){
 						sock.write('550 Server does not handle that email domain\r\n')
 						break

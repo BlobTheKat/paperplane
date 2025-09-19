@@ -1,7 +1,7 @@
 import net from 'net'
 import { connect, TLSSocket } from 'tls'
 import { resolveMx } from 'dns'
-import { Mail } from './mail.js'
+import { _internedBuffers, Mail } from './mail.js'
 import crypto from 'crypto'
 import fs from 'fs'
 
@@ -244,7 +244,7 @@ export class SMTPClient extends Map{
 			if(!to.length) return r([])
 			const targets = new Map()
 			for(const email of to){
-				const ser = Mail.getServer(email)
+				const ser = Mail.getDomain(email)
 				let arr = targets.get(ser)
 				if(!arr) targets.set(ser, arr = [email])
 				else arr.push(email)
@@ -252,7 +252,7 @@ export class SMTPClient extends Map{
 			todo = targets.size
 			for(const {0:ser,1:tos} of targets)
 				this.getSession(ser, sock => this.#send(sock, from, tos, body).then(fin, e => (failed.push(tos), this.debug?.(e), fin())))
-		}else this.getSession(Mail.getServer(to), sock =>
+		}else this.getSession(Mail.getDomain(to), sock =>
 			this.#send(sock, from, [to = to.trim()], body).then(fin, e => (failed.push(to), this.debug?.(e), fin())))
 	}) }
 	async #send(sock, from, to, body){
@@ -280,6 +280,7 @@ export class SMTPClient extends Map{
 			sock.write(`DATA\r\n`)
 			if(!(await sock.line()).startsWith('354')) throw null
 			sock.write(body.dot ??= body.mail.toBuffer(this, from, false))
+			sock.write(_internedBuffers.end)
 		}
 		if(!(await sock.line()).startsWith('250')) throw null
 		return f

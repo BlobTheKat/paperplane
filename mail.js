@@ -2,23 +2,56 @@ import crypto from 'crypto'
 
 export class Mail extends Map{
 	#body
-	constructor(a, b){
+	/**
+	 * Shorthand constructor
+	 * @param {{[key: string]: string}} headers Mail headers
+	 * @param {Buffer | string | undefined} body Mail body
+	 */
+	constructor(headers, body){
 		super()
-		if(typeof a == 'object' && !(a instanceof Uint8Array) && !(a instanceof ArrayBuffer)){
-			for(const k in a)
-				super.set(k.toLowerCase(), (''+a[k]).trim())
-			a = b
+		if(typeof headers == 'object' && !(headers instanceof Uint8Array) && !(headers instanceof ArrayBuffer)){
+			for(const k in headers)
+				super.set(k.toLowerCase(), (''+headers[k]).trim())
+			headers = body
 		}
-		this.#body = Buffer.from(a || '')
+		this.#body = Buffer.from(headers || '')
 	}
+	/**
+	 * Set mail header
+	 * @param {*} k Header key, which will be lowercased
+	 * @param {*} v Header value, which will be truncated
+	 */
 	setHeader(k, v){ super.set(k.toLowerCase(), (''+v).trim()) }
+	/**
+	 * Get mail header
+	 * @param {*} k Header key, which is lowercased
+	 */
 	getHeader(k){ return super.get(k.toLowerCase()) }
+	/**
+	 * Check if mail has a header (even if it is empty)
+	 * @param {*} k Header key, which is lowercased
+	 */
 	hasHeader(k){ return super.has(k.toLowerCase()) }
+	/**
+	 * Remove a mail header
+	 * @param {*} k Header key, which is lowercased
+	 */
 	removeHeader(k){ return super.delete(k.toLowerCase()) }
+	/**
+	 * Email body, as a buffer. Getter/setter, which converts any assigned value to a buffer
+	 */
 	set body(a){
 		this.#body = Buffer.from(a || '')
 	}
 	get body(){ return this.#body }
+
+	/**
+	 * Serialize an email
+	 * @param {import('./smtpcli.js').SMTPClient} [norm] SMTPClient object to use for DKIM signatures
+	 * @param {string} [from] Optionally use a fallback `from` address if the header is not present
+	 * @param {boolean} [chunking=true] Whether to serialize for BDAT commands (true) or DATA / RETR (false). If false, essentially applies dot-stuffing. It does not append \r\n.\r\n for you.
+	 * @returns {Buffer}
+	 */
 	toBuffer(norm = null, from = '', chunking = true){
 		from = super.get('from') ?? from
 		// Assume utf-8 support
@@ -26,7 +59,7 @@ export class Mail extends Map{
 		const arr = [null]
 		if(norm){
 			h = crypto.createHash('sha256')
-			host = from ? Mail.getServer(from) : ''
+			host = from ? Mail.getDomain(from) : ''
 			key = host ? norm.get(host) || norm.privKey : norm.privKey
 		}
 		const body = this.#body
@@ -48,7 +81,6 @@ export class Mail extends Map{
 			const a = body.subarray(i)
 			arr.push(a)
 			if(h) h.update(end >= body.length ? a : body.subarray(i, end))
-			arr.push(_internedBuffers.end)
 		}else{
 			arr.push(body)
 			if(h) h.update(end < body.length ? body.subarray(0, end) : body)
@@ -71,6 +103,10 @@ export class Mail extends Map{
 		arr[0] = Buffer.from(headers)
 		return Buffer.concat(arr)
 	}
+	/**
+	 * Normalize the mail object, adding common headers like Date, Message-ID if they are missing
+	 * @param {string} [from] Enforce the `From` header to be this address. Preserves display name of old address if there was one
+	 */
 	normalize(from = ''){
 		if(from){
 			const display = Mail.getDisplayName(super.get('from') ?? '')
@@ -85,20 +121,42 @@ export class Mail extends Map{
 	#genId(now = Math.floor(Date.now()*.001)+'', from = super.get('from')){
 		const rand = new Int32Array(4)
 		for(let i = 0; i < 4; i++) rand[i] = Math.floor(Math.random() * 4294967296)
-		return `<pplane-${now}-${Buffer.from(rand.buffer).toString('base64url')}@${Mail.getServer(from)}>`
+		return `<paperplane-${now}-${Buffer.from(rand.buffer).toString('base64url')}@${Mail.getDomain(from)}>`
 	}
-	id(){
+	/**
+	 * Get (or generate & set) the Message-ID
+	 * @returns {string}
+	 */
+	getId(){
 		let id = super.get('message-id')
 		if(!id) super.set('message-id', id = this.#genId())
 		return id
 	}
+	/**
+	 * Calculate an estimate size for the mail in bytes. Actual serialized length will vary depending on how it was serialized (e.g chunking? dkim?)
+	 * @returns {number}
+	 */
 	estimateSize(){
 		let i = this.body.length + 2
 		for(const {0:k,1:v} of this) i += k.length + v.length + 4
 		return i
 	}
+	/**
+	 * Number of set headers on this mail
+	 */
 	get headerCount(){ return super.size }
-	static getServer(email){
+	/**
+	 * Get the domain part of an email
+	 * @param {string} email
+	 * @returns {string}
+	 * @example
+	 * ```js
+	 * Mail.getDomain(`"John Doe" <johndoe@example.com>`) === 'example.com'
+	 * Mail.getDomain(`weird+email@special`) === 'special'
+	 * Mail.getDomain(`not an email`) === ''
+	 * ```
+	 */
+	static getDomain(email){
 		const split = email.lastIndexOf('@') + 1
 		if(!split) return ''
 		email = email.slice(split)
@@ -106,6 +164,17 @@ export class Mail extends Map{
 		if(split2 >= 0) email = email.slice(0, split2)
 		return email.toLowerCase().trimEnd()
 	}
+	/**
+	 * Get the local part of an email
+	 * @param {string} email
+	 * @returns {string}
+	 * @example
+	 * ```js
+	 * Mail.getLocal(`"John Doe" <johndoe@example.com>`) === 'johndoe'
+	 * Mail.getLocal(`weird+email@special`) === 'weird+email'
+	 * Mail.getLocal(`not an email`) === ''
+	 * ```
+	 */
 	static getLocal(email){
 		const split = email.lastIndexOf('@')
 		if(split < 0) return ''
@@ -123,6 +192,17 @@ export class Mail extends Map{
 		if(split2 >= 0) email = email.slice(split2+1)
 		return email
 	}
+	/**
+	 * Get the local part of an email
+	 * @param {string} email
+	 * @returns {string}
+	 * @example
+	 * ```js
+	 * Mail.getDisplayName(`"John Doe" <johndoe@example.com>`) === '"John Doe"'
+	 * Mail.getDisplayName(`weird+email@special`) === ''
+	 * Mail.getDisplayName(`not an email`) === ''
+	 * ```
+	 */
 	static getDisplayName(email){
 		email = email.trimStart()
 		let i = 0
@@ -141,6 +221,11 @@ export class Mail extends Map{
 		if(split >= 0) email = email.slice(0, split)
 		return email.trimEnd()
 	}
+	/**
+	 * Parse an email from a buffer
+	 * @param {Buffer} buf
+	 * @param {boolean} [chunking=false] Whether to parse from BDAT commands (true) or DATA / RETR (false). If false, essentially applies dot-unstuffing. It does not remove \r\n.\r\n for you.
+	 */
 	static fromBuffer(buf, chunking = false){
 		const m = new Mail()
 		const sep = buf.indexOf('\n\r\n')
@@ -191,13 +276,16 @@ const knownHeaders = new Map()
 	.set('dkim-signature', 'DKIM-Signature')
 
 const end = Buffer.from('\r\n.\r\n')
-const _internedBuffers = {
+export const _internedBuffers = {
 	end, newline: end.subarray(0, 2),
 	dot: end.subarray(2, 3)
 }
 
+/**
+ * @returns {string} Unique identifier in the format: `paperplane-<unix_timestamp>-r4nDomBaSe64...`
+ */
 export function uniqueId(){
 	const rand = new Int32Array(4)
 	for(let i = 0; i < 4; i++) rand[i] = Math.floor(Math.random() * 4294967296)
-	return `pplane-${Math.floor(Date.now()*.001)}-${Buffer.from(rand.buffer).toString('base64url')}`
+	return `paperplane-${Math.floor(Date.now()*.001)}-${Buffer.from(rand.buffer).toString('base64url')}`
 }

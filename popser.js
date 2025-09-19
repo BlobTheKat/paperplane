@@ -1,5 +1,6 @@
 import net from 'net'
 import tls, { TLSSocket } from 'tls'
+import { _internedBuffers } from './mail.js'
 
 export class POPServer{
 	debug = null
@@ -169,6 +170,7 @@ export class POPServer{
 									if(buf){
 										sock.write('+OK '+buf.length+' bytes\r\n')
 										sock.write(buf)
+										sock.write(_internedBuffers.end)
 									}else sock.write('-ERR Email not available\r\n')
 								}, _ => { sock.write('-ERR Email not available\r\n') })
 								else buf = r ? r.toBuffer(null, '', false) : undefined
@@ -176,6 +178,7 @@ export class POPServer{
 							if(buf){
 								sock.write('+OK '+buf.length+' bytes\r\n')
 								sock.write(buf)
+								sock.write(_internedBuffers.end)
 							}else if(buf === undefined){
 								sock.write('-ERR Email not available\r\n')
 							}

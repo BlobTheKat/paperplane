@@ -10,7 +10,7 @@
 
 ### Sending emails
 ```js
-import { Mail, SMTPClient } from "paperplane-mail"
+import { Mail, SMTPClient } from "paperplane-mailer"
 
 const cli = new SMTPClient('myemail.com', './dkim.key', 'mail')
 
@@ -30,7 +30,7 @@ cli.send('me@myemail.com', [ 'you@gmail.com' ], mail).then(failed => {
 
 ### Receiving emails
 ```js
-import { Mail, SMTPServer, SpamAssassin, uniqueId } from "paperplane-mail"
+import { Mail, SMTPServer, SpamAssassin, uniqueId } from "paperplane-mailer"
 
 // Create an SMTP server with a basic filter [ 'myemail.com' ]
 // All incoming mail not meant for something@myemail.com is rejected for us
@@ -94,7 +94,7 @@ class Inbox extends Map{
 		this.password = password
 	}
 	add(mail){
-		const id = uniqueId() // pplane-123...-BaSe64...
+		const id = uniqueId() // Unique identifier in the format: paperplane-<unix_timestamp>-r4nDomBaSe64...
 		this.set(id, mail)
 		return id
 	}
@@ -106,7 +106,7 @@ inboxes.set('john', new Inbox({ password: 'password123' }))
 
 ### Downloading emails to a client
 ```js
-import { Mail, POPServer } from 'paperplane-mail'
+import { Mail, POPServer } from "paperplane-mailer"
 
 /* Variables from previous example omitted for brevity */
 
@@ -141,7 +141,7 @@ popServer.onFetchMessage = (auth, id) => {
 
 ### Sending emails from a client
 ```js
-import { Mail, SMTPServer } from 'paperplane-mail'
+import { Mail, SMTPServer } from 'paperplane-mailer'
 
 /* Variables from previous examples omitted for brevity */
 //const smtpServer = ...
