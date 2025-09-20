@@ -87,6 +87,7 @@ export class SMTPClient extends Map{
 		let sock = net.createConnection(25, targets[targets.length-1], () => {
 			this.debug?.('SMTPCLI>>Connected!')
 			if(!retry) sock.write(`EHLO ${this.host}\r\n`)
+			sock.removeAllListeners('error')
 		})
 		sock.setKeepAlive(true, 60e3)
 		sock.setTimeout(60e3)
@@ -95,6 +96,7 @@ export class SMTPClient extends Map{
 			net.Socket.prototype.write.call(sock, buf)
 		}
 		const buffered = []
+		let bufferedSize = 0, lineStart = Date.now()
 		const TLS = 1073741824
 		let ext = 0, maxSize = Infinity
 		let lineCb = null, linesBuffered = []
@@ -103,15 +105,20 @@ export class SMTPClient extends Map{
 			while(i < buf.length){
 				const j = buf.indexOf(10, i)
 				if(j < 0){
-					buffered.push(new Uint8Array(buf.buffer, buf.byteOffset + i, buf.length - i))
+					buffered.push(i ? buf.subarray(i) : buf)
+					if(Date.now() - lineStart > 120e3 || (bufferedSize += buf.length - i) > 65536) sock.destroy()
 					return
 				}
-				if(j > i) buffered.push(new Uint8Array(buf.buffer, buf.byteOffset + i, j - i))
+				if(j > i){
+					buffered.push(buf.subarray(i, j))
+					if(Date.now() - lineStart > 120e3 || (bufferedSize += j - i) > 65536) sock.destroy()
+				}
 				i = j+1
+				lineStart = Date.now(); bufferedSize = 0
 				const line = Buffer.concat(buffered).toString().trim()
 				buffered.length = 0
 				this.debug?.('SMTPCLI>>\x1b[33mS: %s\x1b[m', line)
-				if(stage > 2){
+				if(stage < 0){
 					if(lineCb) lineCb(line)
 					else linesBuffered.push(line)
 					continue
@@ -141,7 +148,6 @@ export class SMTPClient extends Map{
 								stage = 2
 							}else{
 								// TLS not supported :(
-								sock.removeAllListeners('error')
 								sock.removeAllListeners('close')
 								sock.end()
 								return err(null)
@@ -149,7 +155,7 @@ export class SMTPClient extends Map{
 						}else{
 							sock.extensions = ext
 							sock.line = () =>
-								linesBuffered.length ? Promise.resolve(linesBuffered.shift()) : new Promise(r => lineCb = r )
+								linesBuffered.length ? Promise.resolve(linesBuffered.shift()) : new Promise(r => stage == -1 ? lineCb = r : r('') )
 							let i = 0
 							const done = () => {
 								if(sock.closed) return
@@ -165,8 +171,7 @@ export class SMTPClient extends Map{
 								return false
 							}
 							done()
-							stage = 3
-							sock.removeAllListeners('error')
+							stage = -1
 							sock.removeAllListeners('close')
 						}
 						break
@@ -175,7 +180,6 @@ export class SMTPClient extends Map{
 						stage = 0; ext = 0
 						// start TLS
 						sock.removeAllListeners('data')
-						sock.removeAllListeners('error')
 						sock.removeAllListeners('close')
 						this.debug?.('SMTPCLI>>Upgrading to TLS...')
 						sock = connect(sock, { socket: sock, servername: targets[targets.length-1] }, () => {
@@ -187,29 +191,27 @@ export class SMTPClient extends Map{
 							TLSSocket.prototype.write.call(sock, buf)
 						}
 						sock.on('data', ondata)
-						sock.on('error', err)
 						sock.on('close', err)
 				}
 			}
 		}
 		sock.on('data', ondata)
 		const err = v => {
-			if(v === true) return // on('close') where on('error') was also called
-
 			this.debug?.('SMTPCLI>>Failed: '+v)
+
+			if(stage < 0){
+				if(lineCb) lineCb('')
+				stage = -2
+				this.#sessions.delete(hostname)
+				return
+			}
 
 			// 3 for network issues, 2 for clean closes
 			if(++retry < 3 - (v === false)) return this.#connect(hostname, targets, retry, cbs)
-			
 			targets.pop()
 			this.#connect(hostname, targets, 0, cbs)
 		}
-		sock.on('timeout', () => {
-			sock.removeAllListeners('error')
-			sock.removeAllListeners('close')
-			sock.end()
-			this.#sessions.delete(hostname)
-		})
+		sock.on('timeout', () => sock.destroy())
 		sock.on('error', err)
 		sock.on('close', err)
 	}

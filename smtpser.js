@@ -90,15 +90,19 @@ export class SMTPServer extends Set{
 		}
 		sock.write('220 '+this.hostWatermark+' ESMTP Paperplane\r\n')
 		const buffered = []
+		let bufferedSize = 0, lineStart = Date.now()
 		let hostname = '', stage = 0
 		let user = '', auth = null
 		let from = '', bodyLen = 0
 		const body = [], tos = []
 		let bodyToRead = 0
+		sock.setTimeout(60e3)
 		const ondata = buf => {
 			let i = 0
 			loop: while(i < buf.length){
 				if(bodyToRead){
+					// Kill connections with average speed less than 1KB/s
+					if((bodyLen+buf.length) / Math.max(Date.now() - lineStart + 60e3, 0) < 1) return void sock.destroy()
 					if(bodyToRead > buf.length-i){
 						bodyToRead -= buf.length-i
 						body.push(i ? buf.subarray(i) : buf)
@@ -109,68 +113,97 @@ export class SMTPServer extends Set{
 					this.debug?.(debugPrefix+'\x1b[32mC:(%d bytes) fin\x1b[m', bodyToRead)
 					bodyToRead = 0
 					if(stage == 5){
+						stage = 0
+						const rawBody = Buffer.concat(body)
+						body.length = bodyLen = 0
 						if(typeof this.checkAuth == 'function' ? !this.checkAuth(auth, !type) : type && this.checkAuth && !auth){
 							sock.write('530 Unauthenticated\r\n')
+							from = ''; tos.length = 0
 							break
 						}
 						let err = ''
-						stage = 0
 						try{
-							const rawBody = Buffer.concat(body)
 							const r = (type ? this.onOutgoing : this.onIncoming)?.call(this, auth, from, tos.slice(), Mail.fromBuffer(rawBody, true), rawBody, sock.remoteAddress)
 							if(typeof r?.then != 'function') err = r ?? ''
 						}catch(e){ console.error(e); err = 1 }
 						sock.write(err ? '550 '+(typeof err == 'string' ? err.replace(/[\r\n]/g, ' ') : 'Internal server error')+'\r\n' : '250 Message queued\r\n')
-						body.length = bodyLen = 0
 						from = ''; tos.length = 0
 					}else sock.write('250 Received\r\n')
+					if(i >= buf.length) return
 				}
-				if(i >= buf.length) return
-				if(stage == 3){ let i1 = i; while(true){
-					const j = buf.indexOf(10, i1)
-					if(j < 0){
-						body.push(i ? buf.subarray(i) : buf)
-						this.debug?.(debugPrefix+'\x1b[32mC:(%d bytes)\x1b[m', buf.length-i)
-						return
-					}
-					let k = j, b = buf, bi = body.length
-					for(let i = 3; i >= 0; i--){
-						if(!k) k = (b = body[--bi]) ? b.length : 0
-						if(!k || b[--k] != ((0x0D2E0A0D>>i*8)&255)){ k = -1; break }
-					}
-					if(k < 0){ i1 = j+1; continue }
-					if(j+1 > i){
-						body.push(buf.subarray(i, j+1))
-						this.debug?.(debugPrefix+'\x1b[32mC:(%d bytes) fin\x1b[m', j+1-i)
-					}
-					if(typeof this.checkAuth == 'function' ? !this.checkAuth(auth, !type) : type && this.checkAuth && !auth){
-						sock.write('530 Unauthenticated\r\n')
+				if(stage == 3){
+					let i1 = i
+					if((bodyLen+buf.length) / Math.max(Date.now() - lineStart + 60e3, 0) < 1) return void sock.destroy()
+					while(true){
+						const j = buf.indexOf(10, i1)
+						if(j < 0){
+							this.debug?.(debugPrefix+'\x1b[32mC:(%d bytes)\x1b[m', buf.length-i)
+							if(bodyLen < 0) return
+							body.push(i ? buf.subarray(i) : buf)
+							if((bodyLen += buf.length - i) > this.maxMessageBody){
+								body.length = 0
+								bodyLen = -1
+							}
+							return
+						}
+						let k = j, b = buf, bi = body.length
+						for(let i = 3; i >= 0; i--){
+							if(!k) k = (b = body[--bi]) ? b.length : 0
+							if(!k || b[--k] != ((0x0D2E0A0D>>i*8)&255)){ k = -1; break }
+						}
+						if(k < 0){ i1 = j+1; continue }
+						if(j+1 > i){
+							this.debug?.(debugPrefix+'\x1b[32mC:(%d bytes) fin\x1b[m', j+1-i)
+							if(bodyLen >= 0){
+								if((bodyLen += buf.length - i) > this.maxMessageBody){
+									body.length = 0
+									bodyLen = -1
+								}
+								body.push(buf.subarray(i, j+1))
+							}
+						}
+						stage = 0
+						lineStart = Date.now()
+						if(bodyLen < 0){
+							sock.write('552 Body too big\r\n')
+							bodyLen = 0
+							from = ''; tos.length = 0
+							break
+						}
+						const rawBody = Buffer.concat(body).subarray(0, -5)
+						body.length = bodyLen = 0
+						if(typeof this.checkAuth == 'function' ? !this.checkAuth(auth, !type) : type && this.checkAuth && !auth){
+							sock.write('530 Unauthenticated\r\n')
+							from = ''; tos.length = 0
+							break
+						}
+						let err = ''
+						try{
+							const r = (type ? this.onOutgoing : this.onIncoming)?.call(this, auth, from, tos.slice(), Mail.fromBuffer(rawBody, false), rawBody, sock.remoteAddress)
+							if(typeof r?.then != 'function') err = r ?? ''
+						}catch(e){ console.error(e); err = 1 }
+						sock.write(err ? '550 '+(typeof err == 'string' ? err.replace(/[\r\n]/g, ' ') : 'Internal server error')+'\r\n' : '250 Message queued\r\n')
+						from = ''; tos.length = 0
+						i = j+1
 						break
 					}
-					let err = ''
-					stage = 0
-					try{
-						const rawBody = Buffer.concat(body).subarray(0, -5)
-						const r = (type ? this.onOutgoing : this.onIncoming)?.call(this, auth, from, tos.slice(), Mail.fromBuffer(rawBody, false), rawBody, sock.remoteAddress)
-						if(typeof r?.then != 'function') err = r ?? ''
-					}catch(e){ console.error(e); err = 1 }
-					sock.write(err ? '550 '+(typeof err == 'string' ? err.replace(/[\r\n]/g, ' ') : 'Internal server error')+'\r\n' : '250 Message queued\r\n')
-					body.length = bodyLen = 0
-					from = ''; tos.length = 0
-					i = j+1
-					break
-				} if(i >= buf.length) return }
+					if(i >= buf.length) return
+				}
 				const j = buf.indexOf(10, i)
 				if(j < 0){
-					buffered.push(new Uint8Array(buf.buffer, buf.byteOffset + i, buf.length - i))
-					return
+					buffered.push(i ? buf.subarray(i) : buf)
+					if(Date.now() - lineStart > 120e3 || (bufferedSize += buf.length - i) > 131072) sock.destroy()
 				}
-				if(j > i) buffered.push(new Uint8Array(buf.buffer, buf.byteOffset + i, j - i))
+				if(j > i){
+					buffered.push(buf.subarray(i, j))
+					if(Date.now() - lineStart > 120e3 || (bufferedSize += j - i) > 131072) sock.destroy()
+				}
 				i = j+1
+				lineStart = Date.now(); bufferedSize = 0
 				const line = Buffer.concat(buffered).toString().trim()
 				buffered.length = 0
 				this.debug?.(debugPrefix+'\x1b[32mC: %s\x1b[m', line)
-
+				
 				switch(stage){
 					// AUTH LOGIN
 					case 1:
@@ -391,7 +424,7 @@ export class SMTPServer extends Set{
 			}
 		}
 		sock.on('data', ondata)
-		sock.on('error', () => sock.destroy())
+		sock.on('timeout', () => sock.destroy())
 	}
 	/**
 	 * Create an SMTP server

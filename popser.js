@@ -63,6 +63,7 @@ export class POPServer{
 	#handler(sock){
 		this.debug?.('POP>>New client on ' + (sock instanceof TLSSocket ? 'POP STLS' : 'POPS') + ' port')
 		const buffered = []
+		let bufferedSize = 0, lineStart = Date.now()
 		let user = '', auth = null
 		const toDelete = new Set
 		let messages = null
@@ -73,14 +74,22 @@ export class POPServer{
 				w.call(sock, buf)
 			}
 		}
-		sock.on('error', () => sock.destroy())
+		sock.setTimeout(60e3)
+		sock.on('timeout', () => sock.destroy())
 		const ondata = buf => {
 			let i = 0
 			while(i < buf.length){
 				const j = buf.indexOf('\n', i)
-				if(j < 0) return void buffered.push(i ? buf.subarray(i) : buf)
-				if(j > i) buffered.push(buf.subarray(i, j))
+				if(j < 0){
+					buffered.push(i ? buf.subarray(i) : buf)
+					if(Date.now() - lineStart > 120e3 || (bufferedSize += buf.length - i) > 65536) sock.destroy()
+				}
+				if(j > i){
+					buffered.push(buf.subarray(i, j))
+					if(Date.now() - lineStart > 120e3 || (bufferedSize += j - i) > 65536) sock.destroy()
+				}
 				i = j+1
+				lineStart = Date.now(); bufferedSize = 0
 				const line = Buffer.concat(buffered).toString().trim()
 				buffered.length = 0
 				let split = line.indexOf(' ')+1 || line.length+1
@@ -116,7 +125,6 @@ export class POPServer{
 						}
 						sock.on('secureConnect', () => sock.write('+OK Upgrade successful\r\n'))
 						sock.on('data', ondata)
-						sock.on('error', () => sock.destroy())
 					} break
 					case 'capa':
 						sock.write('+OK Capabilities\r\nUSER\r\nPIPELINING\r\nUIDL\r\n'+(this.supportedExpiry > 0 ? 'EXPIRE '+this.supportedExpiry+'\r\n' : '')+(sock instanceof TLSSocket ? '.\r\n':'STLS\r\n.\r\n'))

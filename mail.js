@@ -1,5 +1,8 @@
 import crypto from 'crypto'
 
+let random = null
+let randomi = 16384
+
 export class Mail extends Map{
 	#body
 	/**
@@ -119,8 +122,10 @@ export class Mail extends Map{
 			super.set('message-id', this.#genId(undefined, from))
 	}
 	#genId(now = Math.floor(Date.now()*.001)+'', from = super.get('from')){
-		const rand = new Int32Array(4)
-		for(let i = 0; i < 4; i++) rand[i] = Math.floor(Math.random() * 4294967296)
+		if(randomi >= 16384){
+			random = crypto.randomBytes(16384)
+			randomi = 0
+		}
 		return `<paperplane-${now}-${Buffer.from(rand.buffer).toString('base64url')}@${Mail.getDomain(from)}>`
 	}
 	/**
@@ -285,7 +290,10 @@ export const _internedBuffers = {
  * @returns {string} Unique identifier in the format: `paperplane-<unix_timestamp>-r4nDomBaSe64...`
  */
 export function uniqueId(){
-	const rand = new Int32Array(4)
-	for(let i = 0; i < 4; i++) rand[i] = Math.floor(Math.random() * 4294967296)
-	return `paperplane-${Math.floor(Date.now()*.001)}-${Buffer.from(rand.buffer).toString('base64url')}`
+	if(randomi >= 16384){
+		random = crypto.randomBytes(16384)
+		randomi = 0
+	}
+	
+	return `paperplane-${Math.floor(Date.now()*.001)}-${random.subarray(randomi, randomi += 16).toString('base64url')}`
 }
