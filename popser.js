@@ -165,7 +165,7 @@ export class POPServer{
 							try{
 								const fail = typeof this.checkAuth == 'function' ? !this.checkAuth(auth) : this.checkAuth && !auth
 								const r = fail ? null : this.onFetchMessage?.(auth, m[idx])
-								if(typeof r?.then == 'promise') r.then(r => {
+								if(typeof r?.then == 'function') r.then(r => {
 									buf = r ? r.toBuffer(null, '', false) : undefined
 									if(buf){
 										sock.write('+OK '+buf.length+' bytes\r\n')
