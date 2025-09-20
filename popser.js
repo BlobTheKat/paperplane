@@ -76,6 +76,7 @@ export class POPServer{
 		}
 		sock.setTimeout(60e3)
 		sock.on('timeout', () => sock.destroy())
+		sock.on('error', _ => {})
 		const ondata = buf => {
 			let i = 0
 			while(i < buf.length){

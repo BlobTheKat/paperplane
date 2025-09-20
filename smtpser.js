@@ -97,6 +97,7 @@ export class SMTPServer extends Set{
 		const body = [], tos = []
 		let bodyToRead = 0
 		sock.setTimeout(60e3)
+		sock.on('error', _ => {})
 		const ondata = buf => {
 			let i = 0
 			loop: while(i < buf.length){

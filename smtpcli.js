@@ -88,6 +88,7 @@ export class SMTPClient extends Map{
 			this.debug?.('SMTPCLI>>Connected!')
 			if(!retry) sock.write(`EHLO ${this.host}\r\n`)
 			sock.removeAllListeners('error')
+			sock.on('error', _ => {})
 		})
 		sock.setKeepAlive(true, 60e3)
 		sock.setTimeout(60e3)
