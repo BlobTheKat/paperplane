@@ -154,6 +154,7 @@ export class SMTPClient extends Map{
 							}
 						}else{
 							sock.extensions = ext
+							sock.maxMessageSize = maxSize
 							sock.line = () =>
 								linesBuffered.length ? Promise.resolve(linesBuffered.shift()) : new Promise(r => stage == -1 ? lineCb = r : r('') )
 							let i = 0
@@ -170,8 +171,8 @@ export class SMTPClient extends Map{
 								sock.unref()
 								return false
 							}
-							done()
 							stage = -1
+							done()
 							sock.removeAllListeners('close')
 						}
 						break
@@ -241,7 +242,7 @@ export class SMTPClient extends Map{
 		let todo = 1
 		const fin = f => { if(f) failed.push(f); --todo || r(failed.flat(1)) }
 		if(transport) this.getSession(transport, sock =>
-			this.#send(sock, from, to = Array.isArray(to) ? to.map(a => a.trim()) : [to.trim()], body).then(fin, () => (failed.push(to), this.debug?.(e), fin())))
+			this.#send(sock, from, to = Array.isArray(to) ? to.map(a => a.trim()) : [to.trim()], body).then(fin, () => (failed.push(to), this.debug?.('SMTPCLI>>%o', e), fin())))
 		else if(Array.isArray(to)){
 			if(!to.length) return r([])
 			const targets = new Map()
@@ -253,9 +254,9 @@ export class SMTPClient extends Map{
 			}
 			todo = targets.size
 			for(const {0:ser,1:tos} of targets)
-				this.getSession(ser, sock => this.#send(sock, from, tos, body).then(fin, e => (failed.push(tos), this.debug?.(e), fin())))
+				this.getSession(ser, sock => this.#send(sock, from, tos, body).then(fin, e => (failed.push(tos), this.debug?.('SMTPCLI>>%o', e), fin())))
 		}else this.getSession(Mail.getDomain(to), sock =>
-			this.#send(sock, from, [to = to.trim()], body).then(fin, e => (failed.push(to), this.debug?.(e), fin())))
+			this.#send(sock, from, [to = to.trim()], body).then(fin, e => (failed.push(to), this.debug?.('SMTPCLI>>%o', e), fin())))
 	}) }
 	async #send(sock, from, to, body){
 		if(!sock) throw null

@@ -126,7 +126,7 @@ export class Mail extends Map{
 			random = crypto.randomBytes(16384)
 			randomi = 0
 		}
-		return `<paperplane-${now}-${Buffer.from(rand.buffer).toString('base64url')}@${Mail.getDomain(from)}>`
+		return `<paperplane-${now}-${random.subarray(randomi, randomi += 16).toString('base64url')}@${Mail.getDomain(from)}>`
 	}
 	/**
 	 * Get (or generate & set) the Message-ID

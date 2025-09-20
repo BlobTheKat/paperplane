@@ -82,11 +82,11 @@ export class POPServer{
 				const j = buf.indexOf('\n', i)
 				if(j < 0){
 					buffered.push(i ? buf.subarray(i) : buf)
-					if(Date.now() - lineStart > 120e3 || (bufferedSize += buf.length - i) > 65536) sock.destroy()
+					if(Date.now() - lineStart > 120e3 || (bufferedSize += buf.length - i) > 65542) sock.destroy()
 				}
 				if(j > i){
 					buffered.push(buf.subarray(i, j))
-					if(Date.now() - lineStart > 120e3 || (bufferedSize += j - i) > 65536) sock.destroy()
+					if(Date.now() - lineStart > 120e3 || (bufferedSize += j - i) > 65542) sock.destroy()
 				}
 				i = j+1
 				lineStart = Date.now(); bufferedSize = 0

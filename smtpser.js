@@ -102,7 +102,11 @@ export class SMTPServer extends Set{
 			loop: while(i < buf.length){
 				if(bodyToRead){
 					// Kill connections with average speed less than 1KB/s
-					if((bodyLen+buf.length) / Math.max(Date.now() - lineStart + 60e3, 0) < 1) return void sock.destroy()
+					if((bodyLen+buf.length) / Math.max(Date.now() - lineStart - 60e3, 0) < 1){
+						this.debug?.(debugPrefix+'Slow socket killed')
+						sock.destroy()
+						return
+					}
 					if(bodyToRead > buf.length-i){
 						bodyToRead -= buf.length-i
 						body.push(i ? buf.subarray(i) : buf)
@@ -133,7 +137,11 @@ export class SMTPServer extends Set{
 				}
 				if(stage == 3){
 					let i1 = i
-					if((bodyLen+buf.length) / Math.max(Date.now() - lineStart + 60e3, 0) < 1) return void sock.destroy()
+					if((bodyLen+buf.length) / Math.max(Date.now() - lineStart - 60e3, 0) < 1){
+						this.debug?.(debugPrefix+'Slow socket killed')
+						sock.destroy()
+						return
+					}
 					while(true){
 						const j = buf.indexOf(10, i1)
 						if(j < 0){
@@ -389,7 +397,7 @@ export class SMTPServer extends Set{
 						break
 					}
 					stage = 3
-					sock.write('354 End data with <CR><LF>.<CR><LF>\r\n')
+					sock.write('354 End data with <CRLF>.<CRLF>\r\n')
 				} break
 				case 'BDAT': {
 					if(!from || !tos.length){
