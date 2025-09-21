@@ -77,20 +77,24 @@ export class POPServer{
 		sock.setTimeout(60e3)
 		sock.on('timeout', () => sock.destroy())
 		sock.on('error', _ => {})
+		let rl = 0
 		const ondata = buf => {
+			if(sock.bufferSize > 1048576) return void sock.destroy()
 			let i = 0
 			while(i < buf.length){
 				const j = buf.indexOf('\n', i)
 				if(j < 0){
+					if(Date.now() - lineStart > 120e3 || (bufferedSize += buf.length - i) > 65542) return void sock.destroy()
 					buffered.push(i ? buf.subarray(i) : buf)
-					if(Date.now() - lineStart > 120e3 || (bufferedSize += buf.length - i) > 65542) sock.destroy()
 				}
 				if(j > i){
+					if(Date.now() - lineStart > 120e3 || (bufferedSize += j - i) > 65542) return void sock.destroy()
 					buffered.push(buf.subarray(i, j))
-					if(Date.now() - lineStart > 120e3 || (bufferedSize += j - i) > 65542) sock.destroy()
 				}
 				i = j+1
 				lineStart = Date.now(); bufferedSize = 0
+				rl = Math.min(lineStart - 60e3, rl + 100)
+				if(rl > lineStart) return void sock.destroy()
 				const line = Buffer.concat(buffered).toString().trim()
 				buffered.length = 0
 				let split = line.indexOf(' ')+1 || line.length+1
@@ -236,7 +240,7 @@ export class POPServer{
 			}
 		}
 		sock.on('data', ondata)
-		sock.write('+OK POP3 server ready\r\n')
+		sock.write('+OK Paperplane POP3 ready\r\n')
 	}
 	/**
 	 * @param {import('tls').SecureContextOptions} opts set TLS options (certificate, ...)

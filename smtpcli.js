@@ -48,7 +48,6 @@ export class SMTPClient extends Map{
 			if(typeof pr?.then == 'function'){
 				const arr = []; let i = 0
 				this.#sessions.set(hostname, arr)
-				sock.ref()
 				const done = () => {
 					while(i < arr.length){
 						const pr = arr[i++](sock)
@@ -57,7 +56,6 @@ export class SMTPClient extends Map{
 							return
 						}
 					}
-					sock.unref()
 					this.#sessions.set(hostname, sock)
 				}
 				pr.then(done, err => { done(); throw err })
@@ -100,19 +98,19 @@ export class SMTPClient extends Map{
 		let bufferedSize = 0, lineStart = Date.now()
 		const TLS = 1073741824
 		let ext = 0, maxSize = Infinity
-		let lineCb = null, linesBuffered = []
+		let lineCb = null, linesBuffered = [], linesLengthBuffered = 0
 		const ondata = buf => {
 			let i = 0
 			while(i < buf.length){
 				const j = buf.indexOf(10, i)
 				if(j < 0){
+					if(Date.now() - lineStart > 120e3 || (bufferedSize += buf.length - i) > 65536) return void sock.destroy()
 					buffered.push(i ? buf.subarray(i) : buf)
-					if(Date.now() - lineStart > 120e3 || (bufferedSize += buf.length - i) > 65536) sock.destroy()
 					return
 				}
 				if(j > i){
+					if(Date.now() - lineStart > 120e3 || (bufferedSize += j - i) > 65536) return void sock.destroy()
 					buffered.push(buf.subarray(i, j))
-					if(Date.now() - lineStart > 120e3 || (bufferedSize += j - i) > 65536) sock.destroy()
 				}
 				i = j+1
 				lineStart = Date.now(); bufferedSize = 0
@@ -121,7 +119,8 @@ export class SMTPClient extends Map{
 				this.debug?.('SMTPCLI>>\x1b[33mS: %s\x1b[m', line)
 				if(stage < 0){
 					if(lineCb) lineCb(line)
-					else linesBuffered.push(line)
+					else if((linesLengthBuffered += line.length) < 1048576) linesBuffered.push(line)
+					else return void sock.destroy()
 					continue
 				}
 				if(retry && !stage && line.startsWith('220')){
@@ -156,8 +155,13 @@ export class SMTPClient extends Map{
 						}else{
 							sock.extensions = ext
 							sock.maxMessageSize = maxSize
-							sock.line = () =>
-								linesBuffered.length ? Promise.resolve(linesBuffered.shift()) : new Promise(r => stage == -1 ? lineCb = r : r('') )
+							sock.line = () => {
+								if(linesBuffered.length){
+									const l = linesBuffered
+									linesLengthBuffered -= l.length
+									return Promise.resolve(l)
+								}else return stage == -1 ? new Promise(r => lineCb = r) : Promise.resolve('')
+							}
 							let i = 0
 							const done = () => {
 								if(sock.closed) return
@@ -204,6 +208,7 @@ export class SMTPClient extends Map{
 			if(stage < 0){
 				if(lineCb) lineCb('')
 				stage = -2
+				linesBuffered.length = 0
 				this.#sessions.delete(hostname)
 				return
 			}

@@ -116,6 +116,7 @@ await popServer.listen(tlsOptions)
 console.log('\x1b[32mPOP servers listening on :110, :995\x1b[m')
 
 popServer.onAuthenticate = (user, pass) => {
+	// TODO: password hashing, timing safe equal, etc...
 	const inbox = inboxes.get(user = Mail.getLocal(user) || user)
 	if(!inbox || inbox.password !== pass) throw 'Invalid password'
 	return { inbox, username: user }

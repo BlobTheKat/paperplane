@@ -98,7 +98,9 @@ export class SMTPServer extends Set{
 		let bodyToRead = 0
 		sock.setTimeout(60e3)
 		sock.on('error', _ => {})
+		let rl = 0
 		const ondata = buf => {
+			if(sock.bufferSize > 1048576) return void sock.destroy()
 			let i = 0
 			loop: while(i < buf.length){
 				if(bodyToRead){
@@ -148,11 +150,10 @@ export class SMTPServer extends Set{
 						if(j < 0){
 							this.debug?.(debugPrefix+'\x1b[32mC:(%d bytes)\x1b[m', buf.length-i)
 							if(bodyLen < 0) return
-							body.push(i ? buf.subarray(i) : buf)
 							if((bodyLen += buf.length - i) > this.maxMessageBody){
 								body.length = 0
 								bodyLen = -1
-							}
+							}else body.push(i ? buf.subarray(i) : buf)
 							return
 						}
 						let k = j, b = buf, bi = body.length
@@ -164,11 +165,10 @@ export class SMTPServer extends Set{
 						if(j+1 > i){
 							this.debug?.(debugPrefix+'\x1b[32mC:(%d bytes) fin\x1b[m', j+1-i)
 							if(bodyLen >= 0){
-								if((bodyLen += buf.length - i) > this.maxMessageBody){
+								if((bodyLen += j+1-i) > this.maxMessageBody){
 									body.length = 0
 									bodyLen = -1
-								}
-								body.push(buf.subarray(i, j+1))
+								}else body.push(buf.subarray(i, j+1))
 							}
 						}
 						stage = 0
@@ -200,19 +200,21 @@ export class SMTPServer extends Set{
 				}
 				const j = buf.indexOf(10, i)
 				if(j < 0){
+					if(Date.now() - lineStart > 120e3 || (bufferedSize += buf.length - i) > 131072) return void sock.destroy()
 					buffered.push(i ? buf.subarray(i) : buf)
-					if(Date.now() - lineStart > 120e3 || (bufferedSize += buf.length - i) > 131072) sock.destroy()
+					return
 				}
 				if(j > i){
+					if(Date.now() - lineStart > 120e3 || (bufferedSize += j - i) > 131072) return void sock.destroy()
 					buffered.push(buf.subarray(i, j))
-					if(Date.now() - lineStart > 120e3 || (bufferedSize += j - i) > 131072) sock.destroy()
 				}
 				i = j+1
 				lineStart = Date.now(); bufferedSize = 0
+				rl = Math.min(lineStart - 60e3, rl + 100)
+				if(rl > lineStart) return void sock.destroy()
 				const line = Buffer.concat(buffered).toString().trim()
 				buffered.length = 0
 				this.debug?.(debugPrefix+'\x1b[32mC: %s\x1b[m', line)
-				
 				switch(stage){
 					// AUTH LOGIN
 					case 1:
@@ -275,7 +277,11 @@ export class SMTPServer extends Set{
 						sock.write('221 Bye\r\n')
 						sock.end()
 						return
-					}else sock.write('503 Impolite\r\n')
+					}else{
+						sock.write('503 Impolite\r\n')
+						sock.destroy()
+						return
+					}
 					continue
 				}
 				switch(verb){
@@ -299,8 +305,12 @@ export class SMTPServer extends Set{
 					break
 				}
 				case 'AUTH': {
-					const method = data.slice(0, 6).toUpperCase()
-					if(method == 'PLAIN '){
+					if(!(sock instanceof TLSSocket)){
+						sock.write('530 Please STARTTLS\r\n')
+						break
+					}
+					const method = data.slice(0, 6).toUpperCase().trimEnd()
+					if(method == 'PLAIN'){
 						let str = ''
 						try{
 							// Don't allow (user+pass).length > 65536
@@ -323,7 +333,7 @@ export class SMTPServer extends Set{
 						}catch{
 							sock.write('535 Invalid credentials\r\n')
 						}
-					}else if(method == 'LOGIN '){
+					}else if(method == 'LOGIN'){
 						sock.write('334 VXNlcm5hbWU6\r\n')
 						stage = 1
 					}else{
