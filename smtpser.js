@@ -210,7 +210,7 @@ export class SMTPServer extends Set{
 				}
 				i = j+1
 				lineStart = Date.now(); bufferedSize = 0
-				rl = Math.min(lineStart - 60e3, rl + 100)
+				rl = Math.max(lineStart - 60e3, rl + 100)
 				if(rl > lineStart) return void sock.destroy()
 				const line = Buffer.concat(buffered).toString().trim()
 				buffered.length = 0

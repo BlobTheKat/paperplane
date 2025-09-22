@@ -86,6 +86,7 @@ export class POPServer{
 				if(j < 0){
 					if(Date.now() - lineStart > 120e3 || (bufferedSize += buf.length - i) > 65542) return void sock.destroy()
 					buffered.push(i ? buf.subarray(i) : buf)
+					return
 				}
 				if(j > i){
 					if(Date.now() - lineStart > 120e3 || (bufferedSize += j - i) > 65542) return void sock.destroy()
@@ -93,7 +94,7 @@ export class POPServer{
 				}
 				i = j+1
 				lineStart = Date.now(); bufferedSize = 0
-				rl = Math.min(lineStart - 60e3, rl + 100)
+				rl = Math.max(lineStart - 60e3, rl + 100)
 				if(rl > lineStart) return void sock.destroy()
 				const line = Buffer.concat(buffered).toString().trim()
 				buffered.length = 0
