@@ -64,19 +64,19 @@ export class SpamAssassin extends Map{
 		else if(!(msg instanceof Uint8Array) && !(msg instanceof ArrayBuffer))
 			msg = Buffer.alloc(0)
 		// Trim leading/trailing new lines from Buffer (if any)
-		let trimStart = -1, trimEnd = msg.length+1
-		const end = msg.length
-		while(++trimStart < end){
-			const byte = msg[trimStart]
-			if (byte !== 10 && byte !== 14 && byte !== 32)
-				break
-		}
+		let trimEnd = msg.length+1
+		//const end = msg.length
+		//while(++trimStart < end){
+		//	const byte = msg[trimStart]
+		//	if (byte !== 10 && byte !== 13 && byte !== 32)
+		//		break
+		//}
 		while(--trimEnd > 0){
 			const byte = msg[trimEnd-1]
-			if (byte !== 10 && byte !== 14 && byte !== 32)
+			if (byte !== 10 && byte !== 13)
 				break
 		}
-		if(trimStart > 0 || trimEnd < end) msg = msg.subarray(trimStart, trimEnd)
+		if(trimEnd < end) msg = msg.subarray(0, trimEnd)
 		const create = (this.secure ? tls : net).createConnection
 		const onopen = () => {
 			sock.removeAllListeners('error')
