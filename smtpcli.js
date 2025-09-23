@@ -266,6 +266,7 @@ export class SMTPClient extends Map{
 	}) }
 	async #send(sock, from, to, body){
 		if(!sock) throw null
+		try{
 		const wait = !(sock.extensions & PIPELINING), suffix = sock.extensions & SMTPUTF8 ? ' SMTPUTF8' : ''
 		const suffix2 = suffix + (!(~sock.extensions & (BINARYMIME | CHUNKING)) ? ' BODY=BINARYMIME'  : sock.extensions & MIMEUTF8 ? ' BODY=8BITMIME' : '')
 		if(from[0] != '<') from = `<${from}>`
@@ -293,5 +294,10 @@ export class SMTPClient extends Map{
 		}
 		if(!(await sock.line()).startsWith('250')) throw null
 		return f
+		}catch{
+			sock.write('RSET\r\n')
+			await sock.line()
+			throw null
+		}
 	}
 }
