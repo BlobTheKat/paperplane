@@ -65,7 +65,7 @@ export class SpamAssassin extends Map{
 			msg = Buffer.alloc(0)
 		// Trim leading/trailing new lines from Buffer (if any)
 		let trimEnd = msg.length+1
-		//const end = msg.length
+		const end = msg.length
 		//while(++trimStart < end){
 		//	const byte = msg[trimStart]
 		//	if (byte !== 10 && byte !== 13 && byte !== 32)
