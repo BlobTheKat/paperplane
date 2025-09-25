@@ -19,8 +19,8 @@ export class POPServer{
 
 	/**
 	 * Called when a client authenticates
-	 * @type (user: string, pass: string) => any
-	 * The default handler will return an object in the shape { user, pass, messages: [] }
+	 * @type (user: string, pass: string, ip: string) => any
+	 * The default handler will return an object in the shape { user, pass }
 	 * @returns an object (or promise to an object) that will be passed to other callbacks
 	 * Throw an error to indicate authentication failure. Returning null or undefined will make it appear to the client as if authentication succeeds.
 	 * Note that onFetchMessage/onDeleteMessage/... may still be fired at any time irrespective of onAuthenticate unless checkAuth is set appropriately. In such cases the `auth` parameter will be null
@@ -138,7 +138,7 @@ export class POPServer{
 						messages = auth = null
 						try{
 							const pass = line.length-split > 65536 ? line.slice(split, split+65536) : line.slice(split)
-							const r = this.onAuthenticate?.(user, pass) ?? null
+							const r = this.onAuthenticate?.(user, pass, sock.remoteAddress) ?? null
 							if(typeof r?.then == 'function'){
 								r.then(v => {
 									auth = v ??= null

@@ -13,26 +13,26 @@ export class SMTPServer extends Set{
 	 * Called when a server sends us incoming mail.
 	 * Note that in practice, `from` is often modified to contain the bounce email for the email relayer. You should instead check mail.get('from') to get the original sender
 	 * Likewise `tos` will likely be filtered to only contain recipients the relayer thought relevant to us
-	 * @type (from: string, tos: string[], mail: Mail, rawMail: Buffer) => string?
+	 * @type (from: string, tos: string[], mail: Mail, rawMail: Buffer, ip: string) => string?
 	 * @returns An info message if delivery failed, or null if it succeeded
 	 */
 	onIncoming = null
 	/**
 	 * Called when a client submits mail to be delivered on their behalf.
-	 * @type (auth: any?, from: string, tos: string[], mail: Mail, rawMail: Buffer) => string?
+	 * @type (auth: any?, from: string, tos: string[], mail: Mail, rawMail: Buffer, ip: string) => string?
 	 * @returns An info message if delivery failed, or null if it succeeded
 	 * If you are forwarding the email, consider replying with a success right away and deferring the send to reduce latency.
 	 */
 	onOutgoing = null
 	/**
 	 * Called when a client (or server) authenticates
-	 * @type (user: string, pass: string, isServer: boolean) => any
+	 * @type (user: string, pass: string, ip: string, isServer: boolean) => any
 	 * The default handler will return an object in the shape { user, pass, isServer }
 	 * @returns an object (or promise to an object) that will be passed to onIncoming/onOutgoing
 	 * Return null or undefined to indicate authentication failure.
 	 * Note that isServer acts primarily as a hint as many mail clients (e.g Outlook) will connect to the wrong port, pretending to be another server
 	 */
-	onAuthenticate = (user, pass, isServer) => {
+	onAuthenticate = (user, pass, _, isServer) => {
 		return { user: Mail.getLocal(user) || user, pass, isServer }
 	}
 	/**
@@ -111,7 +111,7 @@ export class SMTPServer extends Set{
 					body.push(bodyToRead == buf.length ? (i = bodyToRead, buf) : buf.subarray(i, i += bodyToRead))
 					this.debug?.(debugPrefix+'\x1b[32mC:(%d bytes) fin\x1b[m', bodyToRead)
 					bodyToRead = 0
-					if(stage == 5){
+					if(stage == 17){
 						stage = 0
 						const rawBody = Buffer.concat(body)
 						body.length = bodyLen = 0
@@ -130,7 +130,7 @@ export class SMTPServer extends Set{
 					}else sock.write('250 Received\r\n')
 					if(i >= buf.length) return
 				}
-				if(stage == 3){
+				if(stage == 15){
 					let i1 = i
 					if((bodyLen+buf.length) / Math.max(Date.now() - lineStart - 60e3, 0) < 1){
 						this.debug?.(debugPrefix+'Slow socket killed')
@@ -215,30 +215,71 @@ export class SMTPServer extends Set{
 						stage = 2
 						continue loop
 					case 2:
+						user = ''
 						const pass = atob(line.length > 87384 ? line.slice(0, 87384) : line)
 						try{
 							if(user.length + pass.length > 65536){
 								sock.write('535 Invalid credentials\r\n')
-								user = ''; stage = 0
+								stage = 0
 								continue loop
 							}
-							const r = this.onAuthenticate?.(user, pass, !type) ?? null
-							if(typeof r?.then == 'function') r.then(v => {
+							const r = this.onAuthenticate?.(user, pass, sock.remoteAddress, !type) ?? null
+							if(typeof r?.then == 'function') stage = -1, r.then(v => {
 								auth = v ??= null
+								stage = 0
 								sock.write(v === null ? '535 Invalid credentials\r\n' : '235 Authentication successful\r\n')
 							}, e => {
+								stage = 0
 								sock.write('535 Invalid credentials\r\n')
 								throw e
 							})
 							else{
+								stage = 0
 								auth = r
 								sock.write(r === null ? '535 Invalid credentials\r\n' : '235 Authentication successful\r\n')
 							}
 						}catch(e){
 							sock.write('535 Invalid credentials\r\n')
 							Promise.reject(e)
+							stage = 0
 						}
-						user = ''; stage = 0
+						continue loop
+					case 3:
+						try{
+							// Don't allow (user+pass).length > 65536
+							if(line.length > 87389){
+								sock.write('535 Invalid credentials\r\n')
+								stage = 0
+								continue loop
+							}
+							const str = atob(line.slice(5).trim())
+							const start = str.indexOf('\0')+1
+							const j = str.indexOf('\0', start)
+							if(j < 0){
+								sock.write('535 Invalid credentials\r\n')
+								stage = 0
+								continue loop
+							}
+							const r = this.onAuthenticate?.(str.slice(start, j), str.slice(j+1), sock.remoteAddress, !type) ?? null
+							if(typeof r?.then == 'function') stage = -1, r.then(v => {
+								auth = v ??= null
+								stage = 0
+								sock.write(v === null ? '535 Invalid credentials\r\n' : '235 Authentication successful\r\n')
+							}, e => {
+								stage = 0
+								sock.write('535 Invalid credentials\r\n')
+								throw e
+							})
+							else{
+								stage = 0
+								auth = r
+								sock.write(r === null ? '535 Invalid credentials\r\n' : '235 Authentication successful\r\n')
+							}
+						}catch(e){
+							sock.write('535 Invalid credentials\r\n')
+							Promise.reject(e)
+							stage = 0
+						}
 						continue loop
 					case -1:
 						sock.write('503 Bad order\r\n')
@@ -246,7 +287,7 @@ export class SMTPServer extends Set{
 				}
 
 				const sp = line.indexOf(' '), verb = line.slice(0, sp >= 0 ? sp : line.length).toUpperCase(), data = sp >= 0 ? line.slice(sp+1).trimEnd() : ''
-				if(stage >= 4){
+				if(stage >= 16){
 					if(verb != 'BDAT'){
 						sock.write('503 Wrong order\r\n')
 						continue
@@ -260,12 +301,12 @@ export class SMTPServer extends Set{
 						continue
 					}
 					bodyToRead = len
-					stage = 4 + (data.slice(-5).toUpperCase() == ' LAST')
+					stage = 16 + (data.slice(-5).toUpperCase() == ' LAST')
 					continue
 				}
 				if(!hostname){
 					if(verb == 'HELO'){
-						sock.write('250 '+this.hostWatermark+' at your service\r\n')
+						sock.write(`250 ${this.hostWatermark} at your service\r\n`)
 						hostname = data
 					}else if(verb == 'EHLO'){
 						sock.write(`250-${this.hostWatermark} at your service\
@@ -314,25 +355,29 @@ export class SMTPServer extends Set{
 					auth = null
 					const method = data.slice(0, 6).toUpperCase().trimEnd()
 					if(method == 'PLAIN'){
-						let str = ''
-						try{
+						if(!data){
+							stage = 3
+							sock.write('334\r\n')
+						}else try{
 							// Don't allow (user+pass).length > 65536
 							if(data.length > 87389){
 								sock.write('535 Invalid credentials\r\n')
 								break
 							}
-							str = atob(data.slice(5).trim())
+							const str = atob(data.slice(5).trim())
 							const start = str.indexOf('\0')+1
 							const j = str.indexOf('\0', start)
 							if(j < 0){
 								sock.write('535 Invalid credentials\r\n')
 								break
 							}
-							const r = this.onAuthenticate?.(str.slice(start, j), str.slice(j+1), !type) ?? null
-							if(typeof r?.then == 'function') r.then(v => {
+							const r = this.onAuthenticate?.(str.slice(start, j), str.slice(j+1), sock.remoteAddress, !type) ?? null
+							if(typeof r?.then == 'function') stage = -1, r.then(v => {
 								auth = v ??= null
+								stage = 0
 								sock.write(v === null ? '535 Invalid credentials\r\n' : '235 Authentication successful\r\n')
 							}, e => {
+								stage = 0
 								sock.write('535 Invalid credentials\r\n')
 								throw e
 							})
@@ -428,7 +473,7 @@ export class SMTPServer extends Set{
 						sock.write('503 Wrong order\r\n')
 						break
 					}
-					stage = 3
+					stage = 15
 					sock.write('354 End data with <CRLF>.<CRLF>\r\n')
 				} break
 				case 'BDAT': {
@@ -445,7 +490,7 @@ export class SMTPServer extends Set{
 						break
 					}
 					bodyToRead = len
-					stage = 4 + (data.slice(-5).toUpperCase() == ' LAST')
+					stage = 16 + (data.slice(-5).toUpperCase() == ' LAST')
 				} break
 				case 'QUIT':
 					sock.write('221 Bye\r\n')
