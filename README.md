@@ -12,7 +12,9 @@
 ```js
 import { Mail, SMTPClient } from "paperplane-mailer"
 
-const cli = new SMTPClient('myemail.com', './dkim.key', 'mail')
+// DKIM key can be generated with
+// npx paperplane-mailer gen [file?]
+const cli = new SMTPClient('myemail.com', './dkim.key', /*selector*/'mail')
 
 const mail = new Mail({
 	From: 'Me <me@myemail.com>'
@@ -38,8 +40,8 @@ import { Mail, SMTPServer, SpamAssassin, uniqueId } from "paperplane-mailer"
 const smtpServer = new SMTPServer('myemail.com')
 
 const tlsOptions = {
-	key: fs.readFileSync('../.key'),
-	cert: fs.readFileSync('../.pem')
+	key: fs.readFileSync('myemail.key'),
+	cert: fs.readFileSync('myemail.cert')
 }
 await smtpServer.listen(tlsOptions)
 console.info('SMTP servers listening on :25, :465, :587')
