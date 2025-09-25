@@ -118,7 +118,7 @@ console.log('\x1b[32mPOP servers listening on :110, :995\x1b[m')
 popServer.onAuthenticate = (user, pass) => {
 	// TODO: password hashing, timing safe equal, etc...
 	const inbox = inboxes.get(user = Mail.getLocal(user) || user)
-	if(!inbox || inbox.password !== pass) throw 'Invalid password'
+	if(!inbox || inbox.password !== pass) return null
 	return { inbox, username: user }
 }
 // Prevent calling onGetMessages / onFetchMessage before a successful authentication
@@ -148,10 +148,9 @@ import { Mail, SMTPServer } from 'paperplane-mailer'
 //const smtpServer = ...
 
 // Similar to popServer.onAuthenticate
-smtpServer.onAuthenticate = (user, pass, isServer) => {
-	if(isServer) throw 'Server authentication disabled'
+smtpServer.onAuthenticate = (user, pass) => {
 	const inbox = inboxes.get(user = Mail.getLocal(user) || user)
-	if(!inbox || inbox.password !== pass) throw 'Invalid password'
+	if(!inbox || inbox.password !== pass) return null
 	return { inbox, username: user }
 }
 // Prevent calling onOutgoing before a successful authentication

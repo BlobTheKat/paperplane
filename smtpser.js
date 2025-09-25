@@ -217,7 +217,11 @@ export class SMTPServer extends Set{
 					case 2:
 						const pass = atob(line.length > 87384 ? line.slice(0, 87384) : line)
 						try{
-							if(user.length + pass.length > 65536) throw null
+							if(user.length + pass.length > 65536){
+								sock.write('535 Invalid credentials\r\n')
+								user = ''; stage = 0
+								continue loop
+							}
 							const r = this.onAuthenticate?.(user, pass, !type) ?? null
 							if(typeof r?.then == 'function') r.then(v => {
 								auth = v ??= null
@@ -313,12 +317,18 @@ export class SMTPServer extends Set{
 						let str = ''
 						try{
 							// Don't allow (user+pass).length > 65536
-							if(data.length > 87389) throw null
+							if(data.length > 87389){
+								sock.write('535 Invalid credentials\r\n')
+								break
+							}
 							str = atob(data.slice(5).trim())
-							if(!str || str.charCodeAt()) throw null
-							const j = str.indexOf('\0', 1)
-							if(j < 0) throw null
-							const r = this.onAuthenticate?.(str.slice(1, j), str.slice(j+1), !type) ?? null
+							const start = str.indexOf('\0')+1
+							const j = str.indexOf('\0', start)
+							if(j < 0){
+								sock.write('535 Invalid credentials\r\n')
+								break
+							}
+							const r = this.onAuthenticate?.(str.slice(start, j), str.slice(j+1), !type) ?? null
 							if(typeof r?.then == 'function') r.then(v => {
 								auth = v ??= null
 								sock.write(v === null ? '535 Invalid credentials\r\n' : '235 Authentication successful\r\n')
