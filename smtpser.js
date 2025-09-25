@@ -13,7 +13,7 @@ export class SMTPServer extends Set{
 	 * Called when a server sends us incoming mail.
 	 * Note that in practice, `from` is often modified to contain the bounce email for the email relayer. You should instead check mail.get('from') to get the original sender
 	 * Likewise `tos` will likely be filtered to only contain recipients the relayer thought relevant to us
-	 * @type (auth: any?, from: string, tos: string[], mail: Mail, rawMail: Buffer) => string?
+	 * @type (from: string, tos: string[], mail: Mail, rawMail: Buffer) => string?
 	 * @returns An info message if delivery failed, or null if it succeeded
 	 */
 	onIncoming = null
@@ -29,20 +29,12 @@ export class SMTPServer extends Set{
 	 * @type (user: string, pass: string, isServer: boolean) => any
 	 * The default handler will return an object in the shape { user, pass, isServer }
 	 * @returns an object (or promise to an object) that will be passed to onIncoming/onOutgoing
-	 * Throw an error to indicate authentication failure. Returning null or undefined will make it appear to the client as if authentication succeeds.
-	 * Note that onIncoming/onOutgoing may still be fired at any time irrespective of onAuthenticate unless checkAuth is set appropriately. In such cases the `auth` parameter will be null
+	 * Return null or undefined to indicate authentication failure.
+	 * Note that isServer acts primarily as a hint as many mail clients (e.g Outlook) will connect to the wrong port, pretending to be another server
 	 */
 	onAuthenticate = (user, pass, isServer) => {
 		return { user: Mail.getLocal(user) || user, pass, isServer }
 	}
-	/**
-	 * Check that a session is authenticated before allowing MAIL FROM: commands or invoking callbacks
-	 * false: Don't check
-	 * true: Check for outgoing (isServer=false)
-	 * function: custom logic that returns true to allow or false to reject
-	 * @type boolean | (auth: any, isServer: boolean) => boolean
-	 */
-	checkAuth = false
 	/**
 	 * Watermark used within the SMTP protocol
 	 */
@@ -123,18 +115,18 @@ export class SMTPServer extends Set{
 						stage = 0
 						const rawBody = Buffer.concat(body)
 						body.length = bodyLen = 0
-						if(typeof this.checkAuth == 'function' ? !this.checkAuth(auth, !type) : type && this.checkAuth && !auth){
+						if(type && !auth){
 							sock.write('530 Unauthenticated\r\n')
-							from = ''; tos.length = 0; type &= 3
+							from = ''; tos.length = 0
 							break
 						}
 						let err = ''
 						try{
-							const r = (type ? this.onOutgoing : this.onIncoming)?.call(this, auth, from, tos.slice(), Mail.fromBuffer(rawBody, true), rawBody, sock.remoteAddress)
+							const r = auth !== null ? this.onOutgoing(auth, from, tos.slice(), Mail.fromBuffer(rawBody, true), rawBody, sock.remoteAddress) : this.onIncoming(from, tos.slice(), Mail.fromBuffer(rawBody, true), rawBody, sock.remoteAddress)
 							if(typeof r?.then != 'function') err = r ?? ''
 						}catch(e){ console.error(e); err = 1 }
 						sock.write(err ? '550 '+(typeof err == 'string' ? err.replace(/[\r\n]/g, ' ') : 'Internal server error')+'\r\n' : '250 Message queued\r\n')
-						from = ''; tos.length = 0; type &= 3
+						from = ''; tos.length = 0
 					}else sock.write('250 Received\r\n')
 					if(i >= buf.length) return
 				}
@@ -176,23 +168,23 @@ export class SMTPServer extends Set{
 						if(bodyLen < 0){
 							sock.write('552 Body too big\r\n')
 							bodyLen = 0
-							from = ''; tos.length = 0; type &= 3
+							from = ''; tos.length = 0
 							break
 						}
 						const rawBody = Buffer.concat(body).subarray(0, -5)
 						body.length = bodyLen = 0
-						if(typeof this.checkAuth == 'function' ? !this.checkAuth(auth, !type) : type && this.checkAuth && !auth){
+						if(type && !auth){
 							sock.write('530 Unauthenticated\r\n')
-							from = ''; tos.length = 0; type &= 3
+							from = ''; tos.length = 0
 							break
 						}
 						let err = ''
 						try{
-							const r = (type ? this.onOutgoing : this.onIncoming)?.call(this, auth, from, tos.slice(), Mail.fromBuffer(rawBody, false), rawBody, sock.remoteAddress)
+							const r = auth !== null ? this.onOutgoing(auth, from, tos.slice(), Mail.fromBuffer(rawBody, false), rawBody, sock.remoteAddress) : this.onIncoming(from, tos.slice(), Mail.fromBuffer(rawBody, false), rawBody, sock.remoteAddress)
 							if(typeof r?.then != 'function') err = r ?? ''
 						}catch(e){ console.error(e); err = 1 }
 						sock.write(err ? '550 '+(typeof err == 'string' ? err.replace(/[\r\n]/g, ' ') : 'Internal server error')+'\r\n' : '250 Message queued\r\n')
-						from = ''; tos.length = 0; type &= 3
+						from = ''; tos.length = 0
 						i = j+1
 						break
 					}
@@ -228,17 +220,19 @@ export class SMTPServer extends Set{
 							if(user.length + pass.length > 65536) throw null
 							const r = this.onAuthenticate?.(user, pass, !type) ?? null
 							if(typeof r?.then == 'function') r.then(v => {
-								sock.write('235 Authentication successful\r\n')
-								auth = v
-							}, () => {
+								auth = v ??= null
+								sock.write(v === null ? '535 Invalid credentials\r\n' : '235 Authentication successful\r\n')
+							}, e => {
 								sock.write('535 Invalid credentials\r\n')
+								throw e
 							})
 							else{
-								sock.write('235 Authentication successful\r\n')
 								auth = r
+								sock.write(r === null ? '535 Invalid credentials\r\n' : '235 Authentication successful\r\n')
 							}
-						}catch{
+						}catch(e){
 							sock.write('535 Invalid credentials\r\n')
+							Promise.reject(e)
 						}
 						user = ''; stage = 0
 						continue loop
@@ -309,6 +303,11 @@ export class SMTPServer extends Set{
 						sock.write('530 Please STARTTLS\r\n')
 						break
 					}
+					if(from){
+						sock.write('530 Cannot AUTH during a mail transaction\r\n')
+						break
+					}
+					auth = null
 					const method = data.slice(0, 6).toUpperCase().trimEnd()
 					if(method == 'PLAIN'){
 						let str = ''
@@ -321,17 +320,19 @@ export class SMTPServer extends Set{
 							if(j < 0) throw null
 							const r = this.onAuthenticate?.(str.slice(1, j), str.slice(j+1), !type) ?? null
 							if(typeof r?.then == 'function') r.then(v => {
-								sock.write('235 Authentication successful\r\n')
-								auth = v
-							}, () => {
+								auth = v ??= null
+								sock.write(v === null ? '535 Invalid credentials\r\n' : '235 Authentication successful\r\n')
+							}, e => {
 								sock.write('535 Invalid credentials\r\n')
+								throw e
 							})
 							else{
-								sock.write('235 Authentication successful\r\n')
 								auth = r
+								sock.write(r === null ? '535 Invalid credentials\r\n' : '235 Authentication successful\r\n')
 							}
-						}catch{
+						}catch(e){
 							sock.write('535 Invalid credentials\r\n')
+							Promise.reject(e)
 						}
 					}else if(method == 'LOGIN'){
 						if(data){
@@ -351,7 +352,7 @@ export class SMTPServer extends Set{
 					}
 				} break
 				case 'MAIL': {
-					if(typeof this.checkAuth == 'function' ? !this.checkAuth(auth, !type) : type && this.checkAuth && !auth){
+					if(type && !auth){
 						sock.write('530 Unauthenticated\r\n')
 						break
 					}
@@ -374,12 +375,10 @@ export class SMTPServer extends Set{
 						break
 					}
 					const ser = Mail.getDomain(p = p.slice(1, i))
-					if(type){
-						if(!ser || (super.has(ser) ^ this.reject)){
-							sock.write('550 Server does not handle that email domain\r\n')
-							break
-						}
-					}else if(ser && !(super.has(ser) ^ this.reject) && auth) type |= 4
+					if(!ser || (auth !== null && (super.has(ser) ^ this.reject))){
+						sock.write('550 Server does not handle that email domain\r\n')
+						break
+					}
 					from = p
 					sock.write('250 Ok\r\n')
 				} break
@@ -407,7 +406,7 @@ export class SMTPServer extends Set{
 						break
 					}
 					const ser = Mail.getDomain(p = p.slice(1, i))
-					if(!type && (!ser || (super.has(ser) ^ this.reject))){
+					if(!ser || (auth === null && (super.has(ser) ^ this.reject))){
 						sock.write('550 Server does not handle that email domain\r\n')
 						break
 					}
@@ -443,7 +442,6 @@ export class SMTPServer extends Set{
 					sock.end()
 					return
 				case 'RSET':
-					type &= 3
 					from = ''
 					tos.length = 0
 					body.length = 0; bodyLen = 0

@@ -35,12 +35,6 @@ export class POPServer{
 	 */
 	onGetMessages = null
 	/**
-	 * Check that a session is authenticated before invoking callbacks
-	 * function: custom logic that returns true to allow or false to reject
-	 * @type boolean | (auth: any) => boolean
-	 */
-	checkAuth = false
-	/**
 	 * Called when a client fetches a message
 	 * @type (auth: any, message: any) => Mail | Promise<Mail>
 	 * An element from the list returned by onGetMessages() is passed as the message parameter
@@ -101,8 +95,9 @@ export class POPServer{
 				let split = line.indexOf(' ')+1 || line.length+1
 				this.debug?.('POP>>\x1b[32mC: %s\x1b[m', line)
 				const getMessages = cb => {
-					if(typeof this.checkAuth == 'function' ? !this.checkAuth(auth) : this.checkAuth && !auth)
-						return void cb([])
+					if(auth === null){
+						return void sock.write('-ERR Please authenticate\r\n')
+					}
 					let handled = false
 					if(!messages) try{
 						const r = this.onGetMessages?.(auth)
@@ -113,7 +108,7 @@ export class POPServer{
 							}, _ => { cb(messages = []) })
 							handled = true
 						}else messages = r ?? []
-					}catch{ messages = [] }
+					}catch(e){ messages = []; Promise.reject(e) }
 					if(!handled) cb(messages)
 				}
 				switch(line.slice(0, split-1).toLowerCase()){
@@ -146,17 +141,17 @@ export class POPServer{
 							const r = this.onAuthenticate?.(user, pass) ?? null
 							if(typeof r?.then == 'function'){
 								r.then(v => {
-									auth = v
-									sock.write('+OK Logged in\r\n')
-								}, _ => { sock.write('-ERR Rejected\r\n') })
+									auth = v ??= null
+									sock.write(v === null ? '-ERR Rejected\r\n' : '+OK Logged in\r\n')
+								}, e => { sock.write('-ERR Rejected\r\n'); throw e })
 							}else{
 								auth = r
-								sock.write('+OK Logged in\r\n')
+								sock.write(r === null ? '-ERR Rejected\r\n' : '+OK Logged in\r\n')
 							}
-						}catch(e){ sock.write('-ERR Rejected\r\n') }
+						}catch(e){ sock.write('-ERR Rejected\r\n'); Promise.reject(e) }
 						break
 					case 'quit':
-						if(typeof this.checkAuth == 'function' ? !this.checkAuth(auth) : this.checkAuth && !auth);
+						if(auth === null);
 						else if(toDelete.size) this.onDeleteMessages?.(auth, [...toDelete])
 						sock.end('+OK Bye\r\n')
 						break
@@ -182,8 +177,7 @@ export class POPServer{
 							if(idx >= m.length) return void sock.write('-ERR No such message\r\n')
 							let buf = null
 							try{
-								const fail = typeof this.checkAuth == 'function' ? !this.checkAuth(auth) : this.checkAuth && !auth
-								const r = fail ? null : this.onFetchMessage?.(auth, m[idx])
+								const r = auth === null ? null : this.onFetchMessage?.(auth, m[idx])
 								if(typeof r?.then == 'function') r.then(r => {
 									buf = r ? (r.buffer ? r : r.toBuffer(null, '', false)) : undefined
 									if(buf){
@@ -238,7 +232,7 @@ export class POPServer{
 						const split2 = line.indexOf(' ', split)
 						const idx = line.slice(split, split2) - 1 >>> 0, exp = +line.slice(split2) || 0
 						getMessages(m => {
-							if(typeof this.checkAuth == 'function' ? !this.checkAuth(auth) : this.checkAuth && !auth)
+							if(auth === null)
 								return void sock.write('-ERR Auth error\r\n')
 							if(idx >= m.length) return void sock.write('-ERR No such message\r\n')
 							try{ this.onSetExpireRequest?.(auth, m[idx], exp) }catch(e){ Promise.reject(e) }
