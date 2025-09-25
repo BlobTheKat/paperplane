@@ -161,12 +161,17 @@ export class POPServer{
 						sock.end('+OK Bye\r\n')
 						break
 					case 'stat': 
-						getMessages(m => sock.write('+OK '+m.length+' 65536\r\n'))
+						getMessages(m => {
+							let sz = 0
+							for(const msg of m) sz += typeof msg == 'string' || typeof msg == 'number' ? 4096 : msg?.size ?? 4096
+							sock.write('+OK '+m.length+' '+sz+'\r\n')
+						})
 						break
 					case 'uidl': getMessages(m => {
 						let i = 0, s = '+OK '+m.length+' messages\r\n'
 						while(i < m.length){
-							s += i+1+' '+m[i]+'\r\n'
+							const msg = m[i]
+							s += i+1+' '+(typeof msg == 'string' || typeof msg == 'number' ? msg : msg?.id??'unknown')+'\r\n'
 							i++
 						}
 						sock.write(s+'.\r\n')
@@ -214,10 +219,15 @@ export class POPServer{
 						const idx = line.slice(split) >>> 0
 						getMessages(m => {
 							if(idx > m.length) return void sock.write('-ERR No such message\r\n')
-							if(idx) return void sock.write('+OK '+idx+' 4096\r\n')
+							if(idx){
+								const msg = m[idx]
+								sock.write('+OK '+idx+' '+(typeof msg == 'string' || typeof msg == 'number' ? 4096 : msg?.size ?? 4096)+'\r\n')
+								return
+							}
 							let i = 0, s = '+OK '+m.length+' messages\r\n'
 							while(i < m.length){
-								s += i+1+' 4096\r\n'
+								const msg = m[i]
+								s += i+1+' '+(typeof msg == 'string' || typeof msg == 'number' ? 4096 : msg?.size ?? 4096)+'\r\n'
 								i++
 							}
 							sock.write(s+'.\r\n')
