@@ -485,7 +485,7 @@ export class SMTPServer extends Set{
 	 */
 	setTLS(opts){
 		this.#tlsOptions = opts
-		this.#smtpServer?.setSecureContext(opts)
+		this.#smtpsServer?.setSecureContext(opts)
 	}
 	/**
 	 * @param {import('tls').SecureContextOptions} opts TLS options (certificate, ...)
