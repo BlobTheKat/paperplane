@@ -123,8 +123,6 @@ popServer.onAuthenticate = (user, pass) => {
 	if(!inbox || inbox.password !== pass) return null
 	return { inbox, username: user }
 }
-// Prevent calling onGetMessages / onFetchMessage before a successful authentication
-popServer.checkAuth = true
 
 popServer.onGetMessages = (auth) => {
 	const { inbox, username } = auth
@@ -155,8 +153,6 @@ smtpServer.onAuthenticate = (user, pass) => {
 	if(!inbox || inbox.password !== pass) return null
 	return { inbox, username: user }
 }
-// Prevent calling onOutgoing before a successful authentication
-smtpServer.checkAuth = true
 
 smtpServer.onOutgoing = (auth, from, toArr, mail) => {
 	const { inbox, username } = auth
