@@ -267,14 +267,14 @@ export class SMTPClient extends Map{
 	async #send(sock, from, to, body){
 		if(!sock) throw null
 		try{
-		const wait = !(sock.extensions & PIPELINING), suffix = sock.extensions & SMTPUTF8 ? ' SMTPUTF8' : ''
-		const suffix2 = suffix + (!(~sock.extensions & (BINARYMIME | CHUNKING)) ? ' BODY=BINARYMIME'  : sock.extensions & MIMEUTF8 ? ' BODY=8BITMIME' : '')
+		const wait = !(sock.extensions & PIPELINING)
+		const suffix = (sock.extensions & SMTPUTF8 ? ' SMTPUTF8' : '') + (!(~sock.extensions & (BINARYMIME | CHUNKING)) ? ' BODY=BINARYMIME'  : sock.extensions & MIMEUTF8 ? ' BODY=8BITMIME' : '')
 		if(from[0] != '<') from = `<${from}>`
-		sock.write(`MAIL FROM:${from+suffix2}\r\n`)
+		sock.write(`MAIL FROM:${from+suffix}\r\n`)
 		if(wait && !(await sock.line()).startsWith('250')) throw null
 		const f = []
 		for(const rcpt of to){
-			sock.write(rcpt[0] != '<' ? `RCPT TO:<${rcpt}>${suffix}\r\n` : `RCPT TO:${rcpt+suffix}\r\n`)
+			sock.write(rcpt[0] != '<' ? `RCPT TO:<${rcpt}>\r\n` : `RCPT TO:${rcpt}\r\n`)
 			if(wait && !(await sock.line()).startsWith('250')) f.push(rcpt)
 		}
 		if(!wait){

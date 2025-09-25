@@ -125,7 +125,7 @@ export class SMTPServer extends Set{
 						body.length = bodyLen = 0
 						if(typeof this.checkAuth == 'function' ? !this.checkAuth(auth, !type) : type && this.checkAuth && !auth){
 							sock.write('530 Unauthenticated\r\n')
-							from = ''; tos.length = 0
+							from = ''; tos.length = 0; type &= 3
 							break
 						}
 						let err = ''
@@ -134,7 +134,7 @@ export class SMTPServer extends Set{
 							if(typeof r?.then != 'function') err = r ?? ''
 						}catch(e){ console.error(e); err = 1 }
 						sock.write(err ? '550 '+(typeof err == 'string' ? err.replace(/[\r\n]/g, ' ') : 'Internal server error')+'\r\n' : '250 Message queued\r\n')
-						from = ''; tos.length = 0
+						from = ''; tos.length = 0; type &= 3
 					}else sock.write('250 Received\r\n')
 					if(i >= buf.length) return
 				}
@@ -176,14 +176,14 @@ export class SMTPServer extends Set{
 						if(bodyLen < 0){
 							sock.write('552 Body too big\r\n')
 							bodyLen = 0
-							from = ''; tos.length = 0
+							from = ''; tos.length = 0; type &= 3
 							break
 						}
 						const rawBody = Buffer.concat(body).subarray(0, -5)
 						body.length = bodyLen = 0
 						if(typeof this.checkAuth == 'function' ? !this.checkAuth(auth, !type) : type && this.checkAuth && !auth){
 							sock.write('530 Unauthenticated\r\n')
-							from = ''; tos.length = 0
+							from = ''; tos.length = 0; type &= 3
 							break
 						}
 						let err = ''
@@ -192,7 +192,7 @@ export class SMTPServer extends Set{
 							if(typeof r?.then != 'function') err = r ?? ''
 						}catch(e){ console.error(e); err = 1 }
 						sock.write(err ? '550 '+(typeof err == 'string' ? err.replace(/[\r\n]/g, ' ') : 'Internal server error')+'\r\n' : '250 Message queued\r\n')
-						from = ''; tos.length = 0
+						from = ''; tos.length = 0; type &= 3
 						i = j+1
 						break
 					}
@@ -334,8 +334,18 @@ export class SMTPServer extends Set{
 							sock.write('535 Invalid credentials\r\n')
 						}
 					}else if(method == 'LOGIN'){
-						sock.write('334 VXNlcm5hbWU6\r\n')
-						stage = 1
+						if(data){
+							if(data.length > 87389){
+								sock.write('535 Invalid credentials\r\n')
+								break
+							}
+							user = atob(data.slice(5).trim())
+							sock.write('334 UGFzc3dvcmQ6\r\n')
+							stage = 2
+						}else{
+							sock.write('334 VXNlcm5hbWU6\r\n')
+							stage = 1
+						}
 					}else{
 						sock.write('500 Method not supported\r\n')
 					}
@@ -364,10 +374,12 @@ export class SMTPServer extends Set{
 						break
 					}
 					const ser = Mail.getDomain(p = p.slice(1, i))
-					if(type && (!ser || (super.has(ser) ^ this.reject))){
-						sock.write('550 Server does not handle that email domain\r\n')
-						break
-					}
+					if(type){
+						if(!ser || (super.has(ser) ^ this.reject)){
+							sock.write('550 Server does not handle that email domain\r\n')
+							break
+						}
+					}else if(ser && !(super.has(ser) ^ this.reject) && auth) type |= 4
 					from = p
 					sock.write('250 Ok\r\n')
 				} break
@@ -431,6 +443,7 @@ export class SMTPServer extends Set{
 					sock.end()
 					return
 				case 'RSET':
+					type &= 3
 					from = ''
 					tos.length = 0
 					body.length = 0; bodyLen = 0

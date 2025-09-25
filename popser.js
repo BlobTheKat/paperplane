@@ -61,7 +61,7 @@ export class POPServer{
 	onSetExpireRequest = null
 
 	#handler(sock){
-		this.debug?.('POP>>New client on ' + (sock instanceof TLSSocket ? 'POP STLS' : 'POPS') + ' port')
+		this.debug?.('POP>>New client on ' + (sock instanceof TLSSocket ? 'POPS' : 'POP STLS') + ' port')
 		const buffered = []
 		let bufferedSize = 0, lineStart = Date.now()
 		let user = '', auth = null
@@ -180,14 +180,14 @@ export class POPServer{
 								const fail = typeof this.checkAuth == 'function' ? !this.checkAuth(auth) : this.checkAuth && !auth
 								const r = fail ? null : this.onFetchMessage?.(auth, m[idx])
 								if(typeof r?.then == 'function') r.then(r => {
-									buf = r ? r.toBuffer(null, '', false) : undefined
+									buf = r ? (r.buffer ? r : r.toBuffer(null, '', false)) : undefined
 									if(buf){
 										sock.write('+OK '+buf.length+' bytes\r\n')
 										sock.write(buf)
 										sock.write(_internedBuffers.end)
 									}else sock.write('-ERR Email not available\r\n')
 								}, _ => { sock.write('-ERR Email not available\r\n') })
-								else buf = r ? r.toBuffer(null, '', false) : undefined
+								else buf = r ? (r.buffer ? r : r.toBuffer(null, '', false)) : undefined
 							}catch(e){ Promise.reject(e) }
 							if(buf){
 								sock.write('+OK '+buf.length+' bytes\r\n')
