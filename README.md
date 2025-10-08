@@ -14,19 +14,21 @@ import { Mail, SMTPClient } from "paperplane-mailer"
 
 // DKIM key can be generated with
 // npx paperplane-mailer gen [file?]
-const cli = new SMTPClient('myemail.com', './dkim.key', /*selector*/'mail')
+const client = new SMTPClient('mydomain.com', './dkim.key', /*selector*/'mail')
 
 const mail = new Mail({
-	From: 'Me <me@myemail.com>'
+	From: 'Me <sender@mydomain.com>',
+	'Content-Type': 'text/html'
 }, `<html><h1>Hello, world!</h1></html>`)
 
 // .send(from, [to...], mail)
-cli.send('me@myemail.com', [ 'you@gmail.com' ], mail).then(failed => {
-	if(!failed.length){
-		console.info('Mail sent to all recipients successfully!')
-	}else for(const f of failed){
-		console.error('× Failed to send to %s', f)
+client.send('sender@mydomain.com', [ 'you@gmail.com' ], mail).then(failed => {
+	if(failed.length){
+		for(const f of failed)
+			console.error('× Failed to send to %s', f)
+		return
 	}
+	console.info('Mail sent to all recipients successfully!')
 })
 ```
 
@@ -34,14 +36,14 @@ cli.send('me@myemail.com', [ 'you@gmail.com' ], mail).then(failed => {
 ```js
 import { Mail, SMTPServer, SpamAssassin, uniqueId } from "paperplane-mailer"
 
-// Create an SMTP server with a basic filter [ 'myemail.com' ]
-// All incoming mail not meant for something@myemail.com is rejected for us
+// Create an SMTP server with a basic filter [ 'mydomain.com' ]
+// All incoming mail not meant for something@mydomain.com is rejected for us
 // Leave arguments empty to disable filter
-const smtpServer = new SMTPServer('myemail.com')
+const smtpServer = new SMTPServer('mydomain.com')
 
 const tlsOptions = {
-	key: fs.readFileSync('myemail.key'),
-	cert: fs.readFileSync('myemail.cert')
+	key: fs.readFileSync('mydomain.key'),
+	cert: fs.readFileSync('mydomain.cert')
 }
 await smtpServer.listen(tlsOptions)
 console.info('SMTP servers listening on :25, :465, :587')
@@ -68,14 +70,14 @@ smtpServer.onIncoming = async (_, from, toArr, mail, rawMail, ip) => {
 		console.info('Message passed spam test with score %d and symbols:\n  %s',
 			spam.score, spam.symbols.join(' '))
 	}
-	// toArr is guaranteed to all match our filter ['myemail.com']
+	// toArr is guaranteed to all match our filter ['mydomain.com']
 
 	// Normalize the email (make sure we have a correct `Date` header, `Message-ID`, ...)
 	mail.normalize()
 
 	let count = 0
 	for(let to of toArr){
-		// Convert user@myemail.com to user
+		// Convert user@mydomain.com to user
 		to = Mail.getLocal(to) || to
 
 		// This example uses in-memory inboxes, see further below
@@ -112,7 +114,7 @@ import { Mail, POPServer } from "paperplane-mailer"
 
 /* Variables from previous example omitted for brevity */
 
-const popServer = new POPServer('myemail.com')
+const popServer = new POPServer('mydomain.com')
 
 await popServer.listen(tlsOptions)
 console.log('\x1b[32mPOP servers listening on :110, :995\x1b[m')
@@ -157,7 +159,7 @@ smtpServer.onAuthenticate = (user, pass) => {
 smtpServer.onOutgoing = (auth, from, toArr, mail) => {
 	const { inbox, username } = auth
 
-	// from is guaranteed to match our filter ['myemail.com']
+	// from is guaranteed to match our filter ['mydomain.com']
 	// Unlike onIncoming, `from` here actually means the sender
 	// Mail.getLocal('abc@example.com') returns 'abc'
 	// We can return a string to indicate to the sender that delivery failed for that reason
