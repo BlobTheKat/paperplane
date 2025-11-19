@@ -128,7 +128,7 @@ export class POPServer{
 						sock.on('data', ondata)
 					} break
 					case 'capa':
-						sock.write('+OK Capabilities\r\nUSER\r\nPIPELINING\r\nUIDL\r\n'+(this.supportedExpiry > 0 ? 'EXPIRE '+this.supportedExpiry+'\r\n' : '')+(sock instanceof TLSSocket ? '.\r\n':'STLS\r\n.\r\n'))
+						sock.write('+OK Capabilities\r\nUSER\r\nPIPELINING\r\nUIDL\r\nTOP\r\n'+(this.supportedExpiry > 0 ? 'EXPIRE '+this.supportedExpiry+'\r\n' : '')+(sock instanceof TLSSocket ? '.\r\n':'STLS\r\n.\r\n'))
 						break
 					case 'user':
 						user = line.length-split > 65536 ? line.slice(split, split+65536) : line.slice(split)
@@ -171,8 +171,11 @@ export class POPServer{
 						}
 						sock.write(s+'.\r\n')
 					}); break
-					case 'retr': {
-						const idx = line.slice(split) - 1 >>> 0
+					case 'retr': case 'top': {
+						let split2 = line.indexOf(' ', split)
+						if(split2<0) split2 = line.length
+						let top = line[0] == 't' ? (line.slice(split2) + 1 >>> 0) : 0
+						const idx = line.slice(split, split2) - 1 >>> 0
 						getMessages(m => {
 							if(idx >= m.length) return void sock.write('-ERR No such message\r\n')
 							let buf = null
@@ -183,6 +186,13 @@ export class POPServer{
 									if(buf){
 										sock.write('+OK '+buf.length+' bytes\r\n')
 										sock.write(buf)
+										if(top){
+											let i = 0
+											do if(i+3 > (i = buf.indexOf(10, i)+1)) break; while(i < buf.length)
+											if(i) while(top--) if(!(i = buf.indexOf(10, i)+1)) break
+											if(i) i -= buf[i]==10, i -= buf[i] == 13
+											sock.write(buf.subarray(0, i))
+										}else sock.write(buf)
 										sock.write(_internedBuffers.end)
 									}else sock.write('-ERR Email not available\r\n')
 								}, _ => { sock.write('-ERR Email not available\r\n') })
@@ -190,7 +200,13 @@ export class POPServer{
 							}catch(e){ Promise.reject(e) }
 							if(buf){
 								sock.write('+OK '+buf.length+' bytes\r\n')
-								sock.write(buf)
+								if(top){
+									let i = 0
+									do if(i+3 > (i = buf.indexOf(10, i)+1)) break; while(i < buf.length)
+									if(i) while(top--) if(!(i = buf.indexOf(10, i)+1)) break
+									if(i) i -= buf[i]==10, i -= buf[i] == 13
+									sock.write(buf.subarray(0, i))
+								}else sock.write(buf)
 								sock.write(_internedBuffers.end)
 							}else if(buf === undefined){
 								sock.write('-ERR Email not available\r\n')
