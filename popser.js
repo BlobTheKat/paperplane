@@ -185,7 +185,6 @@ export class POPServer{
 									buf = r ? (r.buffer ? r : r.toBuffer(null, '', false)) : undefined
 									if(buf){
 										sock.write('+OK '+buf.length+' bytes\r\n')
-										sock.write(buf)
 										if(top){
 											let i = 0
 											do if(i+3 > (i = buf.indexOf(10, i)+1)) break; while(i < buf.length)
