@@ -178,7 +178,6 @@ export class SMTPClient extends Map{
 							}
 							stage = -1
 							done()
-							sock.removeAllListeners('close')
 						}
 						break
 					default:
@@ -203,8 +202,6 @@ export class SMTPClient extends Map{
 		}
 		sock.on('data', ondata)
 		const err = v => {
-			this.debug?.('SMTPCLI>>Failed: '+v)
-
 			if(stage < 0){
 				if(lineCb) lineCb('')
 				stage = -2
@@ -212,6 +209,7 @@ export class SMTPClient extends Map{
 				this.#sessions.delete(hostname)
 				return
 			}
+			this.debug?.('SMTPCLI>>Failed: '+v)
 
 			// 3 for network issues, 2 for clean closes
 			if(++retry < 3 - (v === false)) return this.#connect(hostname, targets, retry, cbs)
