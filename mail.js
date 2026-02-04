@@ -108,7 +108,7 @@ export class Mail extends Map{
 			}
 		}
 		for(const {0: k, 1: v} of this){
-			const cased = knownHeaders.get(k) ?? ''
+			const cased = Mail.knownHeaders.get(k) ?? ''
 			if(norm && cased && (key || k !== 'dkim-signature')) continue
 			headers += (cased || k) + ': ' + v + '\r\n'
 		}
@@ -230,11 +230,13 @@ export class Mail extends Map{
 				while(email[--j] == '\\');
 				if((j-i)&1) break
 			}
-			if(i < 0) i = 0
+			if(i >= 0){
+				return email.slice(1, i).replace(/\\(.)/g, '$1')
+			}
 		}
-		const split = email.indexOf('<', i)
-		if(split >= 0) email = email.slice(0, split)
-		return email.trimEnd()
+		const split = email.indexOf('<')
+		if(split >= 0) return email.slice(0, split).trim()
+		return ''
 	}
 
 	/**
@@ -337,17 +339,55 @@ export class Mail extends Map{
 		return concat(q)
 	}
 	/**
-	 * Parse a mail body according to a `Content-Transfer-Encoding` header
-	 * @param {string | Buffer} body Body to parse
-	 * @param {string} cte the `Content-Transfer-Encoding` header
-	 * @returns {Buffer} the parsed body
+	 * Parse a mail's body according to its headers
+	 * @param {Map|Mail} headers Headers to use to correctly parse the body
+	 * @param {Buffer} body
+	 * @returns {{multipart: boolean, contentType: string, properties: Map<string, string> | null, content: Buffer | Mail[]}} the parsed body. `Mail[]` is returned for multipart email, in which case you should parse each part on-demand
 	 */
-	static parseBody(body, cte){
-		cte = cte.toLowerCase()
+	static parseBody(headers, body){
+		let ct = headers.get('content-type')??''
+		let semi = ct.indexOf(';')
+		const parsed = {multipart: false, contentType: ct, properties: null, content: null}
+		let boundary = ''
+		if(semi >= 0){
+			let a = ct.slice(semi+1); ct = parsed.contentType = ct.slice(0, semi)
+			const m = parsed.additionalProperties = new Map(), mp = ct.startsWith('multipart/')
+			while(a){
+				semi = a.indexOf(';')
+				let k = '', v = ''
+				if(semi>=0) k = a.slice(0, semi).trim(), a = a.slice(semi+1)
+				else k = a.trim(), a = ''
+				const e = k.indexOf('=')
+				if(e >= 0) v = k.slice(e+1).trimStart(), k = k.slice(0, e).trimEnd()
+				if(v[0] == '"' || v[0] == "'" && v[v.length-1] == v[0]) v = v.slice(1, -1)
+				m.set(k = k.toLowerCase(), v)
+				if(mp && k == 'boundary') boundary = '--' + v + '\r\n'
+			}
+		}
+		if(boundary){
+			parsed.multipart = true
+			const l = parsed.content = []
+			let i = body.indexOf(boundary)
+			if(i < 0) return parsed
+			i += boundary.length
+			boundary = '\r\n' + boundary
+			while(true){
+				const i2 = body.indexOf(boundary, i)
+				if(i2 < 0){
+					boundary = boundary.slice(0, -2) + '--'
+					let final = body.indexOf(boundary, i)
+					if(final < 0) final = body.length
+					l.push(Mail.fromBuffer(body.subarray(i, final), true))
+					return parsed
+				}
+				l.push(Mail.fromBuffer(body.subarray(i, i2), true))
+				i = i2 + boundary.length
+			}
+		}
+		const cte = (headers.get('content-transfer-encoding')??'').toLowerCase()
 		if(cte == 'base64'){
-			return Buffer.from(body+'', 'base64')
+			return parsed.content = Buffer.from(body+'', 'base64'), parsed
 		}else if(cte == 'quoted-printable'){
-			if(typeof body == 'string') body = Buffer.from(body)
 			let q = [], last = 0
 			for(let i = 0; i < body.length; i++){
 				if(body[i] == 61){
@@ -363,17 +403,19 @@ export class Mail extends Map{
 					}
 				}
 			}
-			if(!q.length) return body
+			if(!q.length) return parsed.content = body, parsed
 			if(last < body.length) q.push(body.subarray(last))
-			return concat(q)
+			return parsed.content = concat(q), parsed
 		}
-		return typeof body == 'string' ? Buffer.from(body) : body
+		parsed.content = body
+		return parsed
 	}
 	/**
-	 * Parse this mail's body according to its `Content-Transfer-Encoding` header
-	 * @returns {Buffer} the parsed body
+	 * Parse this mail's body according to its headers
+	 * @returns {{multipart: boolean, contentType: string, properties: Map<string, string> | null, content: Buffer | Mail[]}} the parsed body. `Mail[]` is returned for multipart email, in which case you should parse each part on-demand
 	 */
-	parseBody(){ return Mail.parseBody(this.#body, super.get('content-transfer-encoding')??'') }
+	parseBody(){ return Mail.parseBody(this, this.#body) }
+
 	/**
 	 * Get mail header, and decode it according to `Mail.unescapeHeader`
 	 * @param {string} k Header key, which will be lowercased
@@ -434,11 +476,12 @@ export class Mail extends Map{
 			m.setHeader(buf.str(), buf.str())
 		return m
 	}
+	static getKnownHeaderName(k){ return Mail.knownHeaders.get(k.toLowerCase()) }
+	static knownHeaders = new Map()
+		.set('from', 'From').set('date', 'Date').set('subject', 'Subject')
+		.set('content-type', 'Content-Type').set('message-id', 'Message-ID').set('mime-version', 'MIME-Version')
+		.set('dkim-signature', 'DKIM-Signature')
 }
-const knownHeaders = new Map()
-	.set('from', 'From').set('date', 'Date').set('subject', 'Subject')
-	.set('content-type', 'Content-Type').set('message-id', 'Message-ID').set('mime-version', 'MIME-Version')
-	.set('dkim-signature', 'DKIM-Signature')
 
 const q1 = Buffer.from('\r\n.\r\n=?utf-8?q?')
 export const _internedBuffers = {
