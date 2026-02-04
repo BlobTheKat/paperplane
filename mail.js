@@ -3,6 +3,18 @@ import crypto from 'crypto'
 let random = null
 let randomi = 16384
 
+const concat = arr => {
+	let i = 0
+	for(const n of arr) i += typeof n == 'number' ? 1 : n.length
+	const res = Buffer.alloc(i)
+	i = 0
+	for(const n of arr){
+		if(typeof n == 'number') res[i++] = n
+		else res.set(n, i), i += n.length
+	}
+	return res
+}
+
 export class Mail extends Map{
 	#body
 	/**
@@ -21,31 +33,29 @@ export class Mail extends Map{
 	}
 	/**
 	 * Set mail header
-	 * @param {*} k Header key, which will be lowercased
-	 * @param {*} v Header value, which will be truncated
+	 * @param {string} k Header key, which will be lowercased
+	 * @param {string | Buffer} v Header value, any leading/trailing whitespace be trimmed
 	 */
 	setHeader(k, v){ super.set(k.toLowerCase(), (''+v).trim()) }
 	/**
 	 * Get mail header
-	 * @param {*} k Header key, which is lowercased
+	 * @param {string} k Header key, which will be lowercased
 	 */
 	getHeader(k){ return super.get(k.toLowerCase()) }
 	/**
 	 * Check if mail has a header (even if it is empty)
-	 * @param {*} k Header key, which is lowercased
+	 * @param {string} k Header key, which will be lowercased
 	 */
 	hasHeader(k){ return super.has(k.toLowerCase()) }
 	/**
 	 * Remove a mail header
-	 * @param {*} k Header key, which is lowercased
+	 * @param {string} k Header key, which will be lowercased
 	 */
 	removeHeader(k){ return super.delete(k.toLowerCase()) }
 	/**
 	 * Email body, as a buffer. Getter/setter, which converts any assigned value to a buffer
 	 */
-	set body(a){
-		this.#body = Buffer.from(a || '')
-	}
+	set body(a){ this.#body = Buffer.from(a || '') }
 	get body(){ return this.#body }
 
 	/**
@@ -104,7 +114,7 @@ export class Mail extends Map{
 		}
 		headers += '\r\n'
 		arr[0] = Buffer.from(headers)
-		return Buffer.concat(arr)
+		return concat(arr)
 	}
 	/**
 	 * Normalize the mail object, adding common headers like Date, Message-ID if they are missing
@@ -226,6 +236,156 @@ export class Mail extends Map{
 		if(split >= 0) email = email.slice(0, split)
 		return email.trimEnd()
 	}
+
+	/**
+	 * Escape special characters for use in a header, using the format specified by the RFC, e.g `😎` becomes `=?utf-8?q?=F0=9F=98=8E?=`
+	 * For strings containing a lot of characters that need escaping, base64 encoding will be used, e.g `=?utf-8?b?8J+Yjg==?=`
+	 * @param {string | Buffer} h String to escape
+	 * @returns {Buffer}
+	 */
+	static escapeHeader(h){
+		if(!h.buffer) h = Buffer.from(h)
+		let q = [_internedBuffers.wordQPPrefix], last = 0, lsp = -2
+		let qpThreshold = h.length<30?5:h.length*.2>>>0
+		for(let i = 0; i < h.length; i++){
+			const ch = h[i]
+			q: if(ch==32){
+				if(lsp==i-1) break q
+				if(i>last) q.push(h.subarray(last, i))
+				lsp = i; last=i+1
+				q.push(95)
+				continue
+			}else if(ch==40){
+				q.push(h.subarray(last, last = i+1))
+				continue
+			}else if(ch==61||ch==63){
+				if(!qpThreshold) break q
+				if(i>last) q.push(h.subarray(last, i))
+				q.push(61, 51, ch+7)
+				last = i+1; qpThreshold--
+				continue
+			}else if(ch<32||ch>126){
+				if(!qpThreshold) break q
+				if(i>last) q.push(h.subarray(last, i))
+				q.push(61, (ch<160?48:55)+(ch>>4), ((ch&15)<10?48:55)+(ch&15))
+				last = i+1; qpThreshold--
+				continue
+			}else continue
+			return Buffer.from('=?utf-8?b?' + h.toString('base64') + '?=', 'ascii')
+		}
+		if(q.length==1) return h
+		if(last<h.length) q.push(h.subarray(last))
+		q.push(63, 61), concat(q)
+		return concat(q)
+	}
+	/**
+	 * Unescape special characters from a header value, using the format specified by the RFC, e.g `=?utf-8?q?=F0=9F=98=8E?=` becomes `😎`
+	 * See also: `Mail.esapeHeader`
+	 * @param {string | Buffer} h String to escape
+	 * @returns {Buffer}
+	 */
+	static unesapeHeader(h){
+		if(!h.buffer) h = Buffer.from(h)
+		let q = [], last = 0, f = false
+		for(let i = 0; i < h.length; i++){
+			a: if(h[i] == 61 && h[i+1] === 63){
+				const n = h.indexOf(63, i+2)
+				if(n<0 || h[n+2] !== 63) break a
+				const n2 = h.indexOf(63, n+3)
+				if(n2<0 || h[n2+1] !== 61) break a
+				f = true
+				if(last<i) q.push(h.subarray(last, i))
+				switch(h[n+1]){
+					case 81: case 113:
+						let last2 = n+3
+						for(let i = last2; i < n2; i++){
+							if(h[i] == 61){
+								if(last2 < i) q.push(h.subarray(last2, i))
+								const a = h[i+1]&-33, b = h[i+2]&-33
+								q.push((a>=16&&a<26?a-16:a>=65&&a<71?a-55:0)<<4|(b>=16&&b<26?b-16:b>=65&&b<71?b-55:0))
+								last2 = i+3
+							}else if(h[i] == 95){
+								if(last2 < i) q.push(h.subarray(last2, i))
+								q.push(32)
+								last2 = i+1
+							}
+						}
+						if(last2 < n2) q.push(h.subarray(last2, n2))
+						break
+					case 66: case 98:
+						q.push(Buffer.from(h.toString('ascii', n+3, n2), 'base64'))
+						break
+				}
+				last = n2+2; i = n2+1
+			}else if(h[i] == 32){
+				let j = i
+				while(h[i+1] === 32) i++
+				j += h[i+1] !== 40
+				if(last < j) q.push(h.subarray(last, j))
+				last = i+1
+			}else if(h[i] === 40){
+				const n = h.indexOf(41, i)
+				if(n < 0) continue
+				if(last < i) q.push(h.subarray(last, i))
+				i = n
+				while(h[i+1] === 32) i++
+				last = i+1
+			}
+		}
+		if(!q.length&&!f) return h
+		if(last < h.length) q.push(h.subarray(last))
+		return concat(q)
+	}
+	/**
+	 * Parse a mail body according to a `Content-Transfer-Encoding` header
+	 * @param {string | Buffer} body Body to parse
+	 * @param {string} cte the `Content-Transfer-Encoding` header
+	 * @returns {Buffer} the parsed body
+	 */
+	static parseBody(body, cte){
+		cte = cte.toLowerCase()
+		if(cte == 'base64'){
+			return Buffer.from(body+'', 'base64')
+		}else if(cte == 'quoted-printable'){
+			if(typeof body == 'string') body = Buffer.from(body)
+			let q = [], last = 0
+			for(let i = 0; i < body.length; i++){
+				if(body[i] == 61){
+					if(last<i) q.push(body.subarray(last, i))
+					if(body[i+1] === 10){
+						last = i+2
+					}else if(body[i+1] === 13){
+						last = i+2+(body[i+2] === 10)
+					}else{
+						const a = body[i+1]&-33, b = body[i+2]&-33
+						q.push((a>=16&&a<26?a-16:a>=65&&a<71?a-55:0)<<4|(b>=16&&b<26?b-16:b>=65&&b<71?b-55:0))
+						last = i+3
+					}
+				}
+			}
+			if(!q.length) return body
+			if(last < body.length) q.push(body.subarray(last))
+			return concat(q)
+		}
+		return typeof body == 'string' ? Buffer.from(body) : body
+	}
+	/**
+	 * Parse this mail's body according to its `Content-Transfer-Encoding` header
+	 * @returns {Buffer} the parsed body
+	 */
+	parseBody(){ return Mail.parseBody(this.#body, super.get('content-transfer-encoding')??'') }
+	/**
+	 * Get mail header, and decode it according to `Mail.unescapeHeader`
+	 * @param {string} k Header key, which will be lowercased
+	 */
+	getEncodedHeader(k){ const h = super.get(k.toLowerCase()); return typeof h == 'undefined' ? undefined : Mail.unesapeHeader(h) }
+	/**
+	 * Set mail header, encoding it according to `Mail.escapeHeader`
+	 * @param {string} k Header key, which will be lowercased
+	 * @param {string | Buffer} v Header value. Leading/trailing whitespace is encoded and not trimmed
+	 */
+	setEncodedHeader(k){ super.set(k.toLowerCase(), Mail.esapeHeader(v)) }
+
 	/**
 	 * Parse an email from a buffer
 	 * @param {Buffer} buf
@@ -246,7 +406,7 @@ export class Mail extends Map{
 				i = j+2
 			}
 			if(i < body.length) arr.push(body.subarray(i))
-			if(arr.length > 1) body = Buffer.concat(arr)
+			if(arr.length > 1) body = concat(arr)
 		}
 		m.#body = body
 		let last = null, lastv = ''
@@ -280,10 +440,10 @@ const knownHeaders = new Map()
 	.set('content-type', 'Content-Type').set('message-id', 'Message-ID').set('mime-version', 'MIME-Version')
 	.set('dkim-signature', 'DKIM-Signature')
 
-const end = Buffer.from('\r\n.\r\n')
+const q1 = Buffer.from('\r\n.\r\n=?utf-8?q?')
 export const _internedBuffers = {
-	end, newline: end.subarray(0, 2),
-	dot: end.subarray(2, 3)
+	end: q1.subarray(0, 5), newline: q1.subarray(0, 2),
+	dot: q1.subarray(2, 3), wordQPPrefix: q1.subarray(5),
 }
 
 /**
@@ -294,6 +454,5 @@ export function uniqueId(){
 		random = crypto.randomBytes(16384)
 		randomi = 0
 	}
-	
 	return `paperplane-${Math.floor(Date.now()*.001)}-${random.subarray(randomi, randomi += 16).toString('base64url')}`
 }
