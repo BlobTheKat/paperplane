@@ -246,7 +246,7 @@ export class SMTPClient extends Map{
 		let todo = 1
 		const fin = f => { if(f) failed.push(f); --todo || r(failed.flat(1)) }
 		if(transport) this.getSession(transport, sock =>
-			this.#send(sock, from, to = Array.isArray(to) ? to.map(a => a.trim()) : [to.trim()], body).then(fin, () => (failed.push(to), this.debug?.('SMTPCLI>>%o', e), fin())))
+			this.#send(sock, from, to = Array.isArray(to) ? to.map(a => a.trim()) : [to.trim()], body).then(fin, e => (failed.push(to), this.debug?.('SMTPCLI>>%o', e), fin())))
 		else if(Array.isArray(to)){
 			if(!to.length) return r([])
 			const targets = new Map()
